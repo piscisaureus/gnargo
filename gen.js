@@ -110,10 +110,7 @@ class Node extends Set {
     return filterIter(
       deepFlatIter([
         this.writeHeader(),
-        mapIter(
-          deepFlatIter(mapIter(this, ii => ii.write())),
-          l => l && this.writeItem(l)
-        ),
+        this.writeChildren(),
         this.writeFooter()
       ]),
       str => str != null
@@ -121,6 +118,14 @@ class Node extends Set {
   }
   writeHeader() {
     return `${this.constructor.name} {`;
+  }
+  writeChildren() {
+    return [
+      ...mapIter(
+        deepFlatIter(mapIter(this, ii => ii.write())),
+        l => l && this.writeItem(l)
+      )
+    ];
   }
   writeItem(str) {
     return `  ${str}`;
@@ -607,7 +612,16 @@ class GNVarConditionalAssignment extends SortableScope {
         " "
       );
     } else {
-      return super.write();
+      let childLines = this.writeChildren();
+      if (childLines.length <= 1) {
+        return [
+          this.writeHeader(),
+          ...childLines.map(s => s.replace(/^\s*(.*),\s*$/, " $1 ")),
+          this.writeFooter()
+        ].join("");
+      } else {
+        return super.write();
+      }
     }
   }
   writeHeader() {
