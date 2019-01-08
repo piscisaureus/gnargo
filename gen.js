@@ -355,13 +355,8 @@ class CommentSet extends UniqueStringSet {
 class Root extends Node {
   init(items) {
     this.targetTriples = new TargetTripleSet(items);
-    const packageNameIndex = items
-      .groupBy({ key: "package_name" })
-      .map(PackageNameIndex)
-      .toMap("package_name");
     const crates = items
       .assign({ gnScope: this })
-      .assign({ packageNameIndex })
       .groupBy({ key: "package_name" })
       .groupBy({ key: "package_version" }, true)
       .groupBy({ key: "package_version_is_latest" }, true)
@@ -383,36 +378,19 @@ class Root extends Node {
   }
 }
 
-class PackageNameIndex extends Node {
-  init(items) {
-    const packageVersions = items.groupBy({ key: "package_version" });
-    this.latestVersion = packageVersions
-      .map(pkg => pkg.package_version)
-      .reduce(
-        (latest, version) =>
-          !latest || semverOrdinal(version) > semverOrdinal(latest)
-            ? version
-            : latest
-      );
-  }
-}
-
 class Crate extends SortableScope {
   init(items) {
     this.targetTriples = new TargetTripleSet(items);
     this.crateName = items.target_name;
     this.crateVersion = items.package_version;
-    this.isLatestVersion =
-      items.package_version ===
-      items.packageNameIndex.get(items.package_name).latestVersion;
-    this.gnTargetName = this.isLatestVersion
+    this.gnTargetName = items.package_version_is_latest
       ? this.crateName
       : `${this.crateName}-${this.crateVersion}`;
 
     let gnRules = items.map(GNRule).filter(rule => !!rule.gn_var);
 
     // Super hacky.
-    if (!this.isLatestVersion) {
+    if (!items.package_version_is_latest) {
       for (const target_triple of this.targetTriples) {
         for (const gv of [
           { gn_var: "crate_name", gn_value: this.crateName },
@@ -445,7 +423,7 @@ class Crate extends SortableScope {
   }
   *sortKey() {
     yield* super.sortKey();
-    yield -this.isLatestVersion; // Up-to-date crates first.
+    yield -this.package_version_is_latest; // Up-to-date crates first.
     yield this.crateName; // A-Z.
     yield semverOrdinal(this.crateVersion); // semver low => high.
   }
@@ -517,42 +495,38 @@ class GNRule extends Node {
           gn_value: items.path
         };
     }
-    if (items.dep_target_type) {
-      let { dep_version, dep_crate_name } = items;
-      let isLatestVersion =
-        dep_version ===
-        items.packageNameIndex.get(items.dep_name).latestVersion;
-      switch (items.dep_target_type) {
-        case "static_library": {
-          const gn_label = isLatestVersion
-            ? `:${dep_crate_name}`
-            : `:${dep_crate_name}:${dep_version}`;
+    switch (items.dep_target_type) {
+      case "static_library": {
+        let { dep_version, dep_crate_name, dep_version_is_latest } = items;
+        const gn_label = dep_version_is_latest
+          ? `:${dep_crate_name}`
+          : `:${dep_crate_name}:${dep_version}`;
+        return {
+          gn_type: "list_string",
+          gn_var: "deps",
+          gn_value: gn_label
+        };
+      }
+      case "rust_crate": {
+        let { dep_version, dep_crate_name, dep_version_is_latest } = items;
+        if (dep_version_is_latest) {
           return {
             gn_type: "list_string",
-            gn_var: "deps",
-            gn_value: gn_label
+            gn_var: "extern",
+            gn_value: `:${dep_crate_name}`
           };
-        }
-        case "rust_crate": {
-          if (isLatestVersion) {
-            return {
-              gn_type: "list_string",
-              gn_var: "extern",
-              gn_value: `:${dep_crate_name}`
-            };
-          } else {
-            const $ = JSON.stringify;
-            return {
-              gn_type: "list_raw",
-              gn_var: "extern_version",
-              gn_value: [
-                `{`,
-                `  crate_name = ${$(dep_crate_name)}`,
-                `  crate_version = ${$(dep_version)}`,
-                `}`
-              ].join("\n")
-            };
-          }
+        } else {
+          const $ = JSON.stringify;
+          return {
+            gn_type: "list_raw",
+            gn_var: "extern_version",
+            gn_value: [
+              `{`,
+              `  crate_name = ${$(dep_crate_name)}`,
+              `  crate_version = ${$(dep_version)}`,
+              `}`
+            ].join("\n")
+          };
         }
       }
     }
@@ -1074,6 +1048,28 @@ function generate(commands) {
     });
 
   commands = commands
+    .filter(cmd => cmd.package_name)
+    .groupBy({ key: "package_name" })
+    .map(packageCommands => {
+      const versions = packageCommands.groupBy({ key: "package_version" });
+      const latest_version = versions
+        .map(pkg => pkg.package_version)
+        .reduce(
+          (latest, version) =>
+            !latest || semverOrdinal(version) > semverOrdinal(latest)
+              ? version
+              : latest
+        );
+      return packageCommands.map(
+        cmd =>
+          new cmd.constructor(cmd, {
+            package_version_is_latest: cmd.package_version === latest_version
+          })
+      );
+    })
+    .flat();
+
+  commands = commands
     .groupBy({ key: "target" })
     // Merge the little bit of relevant information from build-script-build
     // targets into regular rustc targets. Drop rust commands with no output
@@ -1167,6 +1163,7 @@ function generate(commands) {
           dep_target_type: dep.target_type,
           dep_name: dep.package_name,
           dep_version: dep.package_version,
+          dep_version_is_latest: dep.package_version_is_latest,
           dep_crate_name: dep.target_name
         }));
         cmd = new cmd.constructor(cmd, { deps });
@@ -1192,6 +1189,7 @@ function generate(commands) {
       let {
         package_name,
         package_version,
+        package_version_is_latest,
         target_name,
         target_type,
         target: target_triple,
@@ -1204,6 +1202,7 @@ function generate(commands) {
           new RustArg({
             package_name,
             package_version,
+            package_version_is_latest,
             target_name,
             target_type,
             target_triple,
