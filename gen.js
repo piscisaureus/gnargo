@@ -508,6 +508,14 @@ class GNRule extends Node {
           gn_value: items.path
         };
     }
+    switch (items.cflag) {
+      case "-I":
+        return {
+          gn_type: "list_string",
+          gn_var: "include_dirs",
+          gn_value: items.path
+        };
+    }
     if (items.dep_target_type) {
       let { dep_version, dep_crate_name } = items;
       let isLatestVersion =
