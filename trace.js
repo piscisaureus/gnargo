@@ -48,6 +48,7 @@ async function traceTargetBuild(target) {
 
   console.log(`TARGET: ${target}`);
   console.log(`WORK_DIR: ${WORK_DIR}`);
+  console.log(`CARGO_HOME: ${cargo_home_dir}`);
   console.log(`CARGO_TARGET_DIR: ${cargo_target_dir}`);
 
   let shimServer = await shimHost();
@@ -57,7 +58,7 @@ async function traceTargetBuild(target) {
   let base_env = keysToUpperCase(process.env);
   base_env = {
     ...base_env,
-    CARGO_HOME_: cargo_home_dir,
+    CARGO_HOME: cargo_home_dir,
     CARGO_TARGET_DIR: cargo_target_dir
   };
   let shim_env = {
