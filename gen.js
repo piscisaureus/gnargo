@@ -120,12 +120,21 @@ class Node extends Set {
     return `${this.constructor.name} {`;
   }
   writeChildren() {
+    let num = 0;
     return [
       ...mapIter(
-        deepFlatIter(mapIter(this, ii => ii.write())),
-        l => l && this.writeItem(l)
+        deepFlatIter(
+          mapIter(
+            mapIter(this, ii => ii.write()),
+            ii => (!num++ ? ii : [this.writeSpacing(), ii])
+          )
+        ),
+        l => l != null && this.writeItem(l)
       )
     ];
+  }
+  writeSpacing() {
+    return this.gnScope instanceof Root ? [""] : [];
   }
   writeItem(str) {
     return `  ${str}`;
@@ -361,7 +370,9 @@ class Root extends Node {
   }
 
   write() {
-    return flatIter(mapIter(this, ii => ii.write()));
+    return mapIter(flatIter(mapIter(this, ii => ii.write())), line =>
+      line.trimRight()
+    );
   }
 }
 
@@ -627,6 +638,9 @@ class GNVarConditionalAssignment extends SortableScope {
   writeHeader() {
     let op = this.isFirstAssignment ? "=" : "+=";
     return `${this.gn_var} ${op} [`;
+  }
+  writeSpacing() {
+    return "";
   }
   writeFooter() {
     return `]`;
