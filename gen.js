@@ -10,23 +10,29 @@ const { searchDir, exeSuffix, flat, main } = require("./lib/util");
 const WORK_DIR = process.argv[2] || `${__dirname}/work`;
 
 main(async () => {
-  const boilerplate = (await readFile(
-    `${__dirname}/boilerplate.gn`,
-    "utf8"
-  )).trim();
   const commands = JSON.parse(
     await readFile(`${WORK_DIR}/commands.json`, "utf8")
   );
+  let { package_dirs, build_gn } = generate(commands);
 
-  const generated = generate(commands);
-  const output = `${boilerplate}\n\n${generated}`;
+  const package_dirs_json = JSON.stringify(package_dirs, null, 2);
+  const package_dirs_json_path = resolve(WORK_DIR, "package_dirs.json");
+  await writeFile(package_dirs_json_path, package_dirs_json);
+  console.log(
+    `Done generating package directory list. ${package_dirs_json_path}`
+  );
 
-  await writeFile(`${WORK_DIR}/BUILD_unformatted.gn`, output);
+  const boilerplate = await readFile(`${__dirname}/boilerplate.gn`, "utf8");
+  build_gn = boilerplate.trim() + "\n\n" + build_gn;
 
-  const build_gn = resolve(WORK_DIR, "BUILD.gn");
-  await writeFile(build_gn, output);
-  await execFile(findGn(commands), ["format", build_gn], { stdio: "inherit" });
-  console.log(`Done generating .gn file. ${build_gn}`);
+  await writeFile(`${WORK_DIR}/BUILD_unformatted.gn`, build_gn);
+
+  const build_gn_path = resolve(WORK_DIR, "BUILD.gn");
+  await writeFile(build_gn_path, build_gn);
+  await execFile(findGn(commands), ["format", build_gn_path], {
+    stdio: "inherit"
+  });
+  console.log(`Done generating .gn file. ${build_gn_path}`);
 });
 
 async function findGn(commands) {
@@ -1171,7 +1177,6 @@ function generate(commands) {
   class RustArg extends Node {
     init(items) {}
   }
-
   let args = commands
     // Flatten all records to one arg per row.
     .map(record => {
@@ -1212,8 +1217,16 @@ function generate(commands) {
       return new record.constructor(record, { path });
     });
 
+  // Build the GN scope from the ground up.
   let root = new Root(args, Root.prototype.init);
+  // Render the gn file.
+  let build_gn_lines = root.write();
+  let build_gn = [...build_gn_lines].map(l => `${l}\n`).join("");
 
-  let lines = root.write();
-  return [...lines].map(l => `${l}\n`).join("");
+  // Build a list of package paths.
+  let package_dirs = Array.from(
+    commands.map(cmd => cmd.env.CARGO_MANIFEST_DIR)
+  ).sort();
+
+  return { build_gn, package_dirs };
 }
