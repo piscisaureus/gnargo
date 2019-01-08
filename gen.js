@@ -1164,7 +1164,9 @@ function generate(commands) {
         ];
       }
     })
-    .flat();
+    .flat()
+    // Now drop the primary package itself.
+    .filter(cmd => !cmd.env.CARGO_PRIMARY_PACKAGE);
 
   class RustArg extends Node {
     init(items) {}
