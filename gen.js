@@ -236,7 +236,10 @@ class Node extends Set {
     return buckets;
   }
 
-  groupBy({ key }) {
+  groupBy({ key }, split = false) {
+    if (split) {
+      return this.map(ii => ii.groupBy({ key }, false)).flat();
+    }
     const Self = this.constructor;
     return new Self(
       this,
@@ -360,12 +363,10 @@ class Root extends Node {
       .assign({ gnScope: this })
       .assign({ packageNameIndex })
       .groupBy({ key: "package_name" })
-      .map(ii => ii.groupBy({ key: "package_version" }))
-      .flat()
-      .map(ii => ii.groupBy({ key: "target_name" }))
-      .flat()
-      .map(ii => ii.groupBy({ key: "target_type" }))
-      .flat()
+      .groupBy({ key: "package_version" }, true)
+      .groupBy({ key: "package_version_is_latest" }, true)
+      .groupBy({ key: "target_name" }, true)
+      .groupBy({ key: "target_type" }, true)
       .map(Crate)
       .sort();
     const conditions = crates
