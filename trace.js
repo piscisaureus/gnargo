@@ -25,8 +25,6 @@ const temp_base_dir = have_dir(WORK_DIR, "temp");
 const temp_dir = resolve(mkdtemp.sync(`${temp_base_dir}/`));
 const shim_dir = have_dir(temp_dir, "shim");
 
-let commands = [];
-
 main(async () => {
   let commands = [];
   for (const target of TARGETS) {
