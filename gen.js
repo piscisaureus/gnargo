@@ -390,6 +390,9 @@ class Crate extends SortableScope {
     let gnRules = items.map(GNRule).filter(rule => !!rule.gn_var);
 
     // Super hacky.
+    let suppressionSet = gnRules.map(rule => rule.suppressed);
+    assert(!suppressionSet.has("undefined"));
+    let suppressed = !suppressionSet.has(false);
     if (!items.package_version_is_latest) {
       for (const target_triple of this.targetTriples) {
         for (const gv of [
@@ -397,7 +400,7 @@ class Crate extends SortableScope {
           { gn_var: "crate_version", gn_value: this.crateVersion }
         ]) {
           gnRules = gnRules.add(
-            new GNRule({ target_triple, gn_type: "string", ...gv })
+            new GNRule({ gn_type: "string", ...gv, target_triple, suppressed })
           );
         }
       }
@@ -494,6 +497,15 @@ class GNRule extends Node {
           gn_var: "include_dirs",
           gn_value: items.path
         };
+      case undefined:
+        break;
+      default:
+        if (!items.force) break;
+        return {
+          gn_type: "list_string",
+          gn_var: "cflags",
+          gn_value: items.cflag
+        };
     }
     switch (items.dep_target_type) {
       case "static_library": {
@@ -540,6 +552,7 @@ class GNVar extends Node {
     const assignedValues = items
       .assign({ gn_type: this.gn_type })
       .groupBy({ key: "gn_value" })
+      .groupBy({ key: "suppressed" }, true)
       .map(GNVarAssignedValue);
 
     // Huge kluge to figure out whether the partial assignment is the first
@@ -580,10 +593,14 @@ class GNVarAssignedValue extends SortableScope {
   }
 
   write() {
-    let { gn_type, gn_value: out } = this;
+    let { gn_var, gn_type, gn_value: out } = this;
     // TODO: gn_string() ... ?
     if (/string$/.test(gn_type)) out = JSON.stringify(out);
-    if (/^list_/.test(gn_type)) out += ",";
+    if (/^list_/.test(gn_type)) {
+      out += ",";
+    } else {
+      out = gn_var + " = " + out;
+    }
     return out
       .split("\n")
       .map(s => s.trimRight())
@@ -603,14 +620,16 @@ class GNVarConditionalAssignment extends SortableScope {
   init(items) {
     return items
       .groupBy({ key: "commentSet" })
+      .groupBy({ key: "suppressed" }, true)
       .map(GNVarConditionalAssignmentSection)
       .sort();
   }
   write() {
-    if (this.gn_type === "string") {
-      return [`${this.gn_var} =`, ...this.map(ii => ii.write()).flat()].join(
-        " "
-      );
+    if (!/^list/.test(this.gn_type)) {
+      //return [`${this.gn_var} =`, ...this.map(ii => ii.write()).flat()].join(
+      //  " "
+      //);
+      return this.map(ii => ii.write()).flat();
     } else {
       let childLines = this.writeChildren();
       if (childLines.length <= 1) {
@@ -656,7 +675,7 @@ class GNVarConditionalAssignmentSection extends SortableScope {
   }
   writeFooter() {}
   writeItem(str) {
-    return str;
+    return (this.suppressed ? "# " : "") + str;
   }
   *sortKey() {
     yield* super.sortKey();
@@ -1035,8 +1054,76 @@ class Command extends Node {
   }
 }
 
-function generate(commands) {
-  commands = new Node(Array.from(commands).values()).map(Command);
+let overrides = [
+  {
+    init() {
+      this.old = new Map();
+      this.latest = null;
+    },
+    packageId(rec) {
+      return `${rec.package_name}-${rec.package_version}`;
+    },
+    kind: "dep",
+    match(dep, depender) {
+      return dep.target_name === "rand" && !dep.package_version_is_latest;
+    },
+    replace(dep, depender, candidates) {
+      let r = candidates.find(
+        c => c.target_name === dep.target_name && c.package_version_is_latest
+      );
+      this.old.set(this.packageId(depender), dep.package_version);
+      this.latest = r.package_version;
+      return r;
+    },
+    comment(rec, d, ch) {
+      let old = this.old.get(this.packageId(rec));
+      return (
+        `Override: use rand v${this.latest} instead` +
+        (old ? ` of v${old}.` : ".")
+      );
+    }
+  },
+  {
+    kind: "record",
+    match: record => Object.values(record).some(v => /owning[-_]ref/.test(v)),
+    replace: (record, all_records) => null,
+    comment: "Override: don't depend on 'owning-ref'."
+  },
+  {
+    comment: "Override: fuchsia stuff removed.",
+    kind: "record",
+    match: record => Object.values(record).some(v => /fuchsia/.test(v)),
+    replace: (record, all_records) => null
+  },
+  {
+    comment: `Suppress "warning: '_addcarry_u64' is not a recognized builtin."`,
+    kind: "record",
+    match(rec) {
+      return (
+        rec.target_name === "ring-core" &&
+        /windows/.test(rec.target_triple) &&
+        rec.libflag &&
+        rec.output
+      );
+    },
+    replace(rec) {
+      let { output, value, path, libflag, ...keep } = rec;
+      return [
+        rec, // Insert -- don't replace.
+        new rec.constructor({
+          cflag: "-Wno-ignored-pragma-intrinsic",
+          ...keep,
+          force: true
+        })
+      ];
+    }
+  }
+];
+
+function generate(trace_output) {
+  const commands = new Node(Array.from(trace_output).values())
+    .map(Command)
+    .map(Object.freeze);
 
   let outputRootDir = commands
     .map(cmd => cmd.output)
@@ -1047,186 +1134,273 @@ function generate(commands) {
       return root;
     });
 
-  commands = commands
-    .filter(cmd => cmd.package_name)
-    .groupBy({ key: "package_name" })
-    .map(packageCommands => {
-      const versions = packageCommands.groupBy({ key: "package_version" });
-      const latest_version = versions
-        .map(pkg => pkg.package_version)
-        .reduce(
-          (latest, version) =>
-            !latest || semverOrdinal(version) > semverOrdinal(latest)
-              ? version
-              : latest
-        );
-      return packageCommands.map(
-        cmd =>
-          new cmd.constructor(cmd, {
-            package_version_is_latest: cmd.package_version === latest_version
-          })
-      );
-    })
-    .flat();
+  for (const override of overrides) {
+    override.init && override.init();
+  }
 
-  commands = commands
-    .groupBy({ key: "target" })
-    // Merge the little bit of relevant information from build-script-build
-    // targets into regular rustc targets. Drop rust commands with no output
-    // and those that were built for the host (usually build-script-build deps).
-    .map(target_commands => {
-      return (
-        target_commands
-          .filter(cmd => cmd.program !== "build-script-build")
-          .filter(cmd => cmd.target_name !== "build_script_build")
-          .filter(cmd => cmd.output)
-          //.filter(cmd => !!cmd.env.HOST)
-          .joinBy(
-            {
-              key: "package_id",
-              with: target_commands.filter(
-                cmd => cmd.program === "build-script-build"
-              )
-            },
-            (l, r) => {
-              if (l.program !== "rustc" || !r) return l;
-              return new Node(l, {
-                args: mergeRustcArgs(l.args, r.output_args)
-              });
-            }
-          )
-      );
-    })
-    .map(target_commands => {
-      let outputMap = new Map(commands.map(cmd => [cmd.output, cmd]));
-      return target_commands.map(cmd => {
-        // Replace object file inputs by the source file that they were generated
-        // from.
-        let args = cmd.args
-          .map(a => {
-            if (a.input === "object" && a.path.startsWith(outputRootDir)) {
+  let currentRecords;
+  let recordOverrides = [];
+
+  let override_baseline = { kind: null, baseline: true };
+  for (let oi = 0; oi <= overrides.length; oi++) {
+    const current_overrides = [override_baseline, ...overrides.slice(0, oi)];
+
+    let records = commands
+      .filter(cmd => cmd.package_name)
+      .groupBy({ key: "package_name" })
+      .map(packageCommands => {
+        const versions = packageCommands.groupBy({ key: "package_version" });
+        const latest_version = versions
+          .map(pkg => pkg.package_version)
+          .reduce(
+            (latest, version) =>
+              !latest || semverOrdinal(version) > semverOrdinal(latest)
+                ? version
+                : latest
+          );
+        return packageCommands.map(
+          cmd =>
+            new cmd.constructor(cmd, {
+              package_version_is_latest: cmd.package_version === latest_version
+            })
+        );
+      })
+      .flat();
+
+    records = records
+      .groupBy({ key: "target" })
+      // Merge the little bit of relevant information from build-script-build
+      // targets into regular rustc targets. Drop rust commands with no output
+      // and those that were built for the host (usually build-script-build deps).
+      .map(target_commands => {
+        return (
+          target_commands
+            .filter(cmd => cmd.program !== "build-script-build")
+            .filter(cmd => cmd.target_name !== "build_script_build")
+            .filter(cmd => cmd.output)
+            //.filter(cmd => !!cmd.env.HOST)
+            .joinBy(
+              {
+                key: "package_id",
+                with: target_commands.filter(
+                  cmd => cmd.program === "build-script-build"
+                )
+              },
+              (l, r) => {
+                if (l.program !== "rustc" || !r) return l;
+                return new Node(l, {
+                  args: mergeRustcArgs(l.args, r.output_args)
+                });
+              }
+            )
+        );
+      })
+      .map(target_commands => {
+        let outputMap = new Map(commands.map(cmd => [cmd.output, cmd]));
+        return target_commands.map(cmd => {
+          // Replace object file inputs by the source file that they were generated
+          // from.
+          let args = cmd.args
+            .map(a => {
+              if (a.input === "object" && a.path.startsWith(outputRootDir)) {
+                assert(outputMap.has(a.path));
+                return outputMap.get(a.path).args;
+              } else {
+                return new Node([a].values());
+              }
+            })
+            .flat();
+          return new cmd.constructor(cmd, { args });
+        });
+      })
+      .map(target_commands => {
+        // Find the command that builds the final output. Then work backwards and find
+        // all deps.
+        let outputMap = new Map(target_commands.map(cmd => [cmd.output, cmd]));
+        let primary = target_commands.filter(
+          cmd => cmd.env.CARGO_PRIMARY_PACKAGE
+        );
+        assert(primary.size === 1);
+        return new Node(findDeps(...primary).values());
+
+        function findDeps(cmd, alreadyIncluded = new Set()) {
+          if (alreadyIncluded.has(cmd.output)) return [];
+          alreadyIncluded.add(cmd.output);
+
+          let depCommands = [];
+          // Find rust deps.
+          depCommands.push(
+            ...cmd.args.filter(a => a.rustflag === "--extern").map(a => {
               assert(outputMap.has(a.path));
-              return outputMap.get(a.path).args;
-            } else {
-              return new Node([a].values());
-            }
-          })
-          .flat();
-        return new cmd.constructor(cmd, { args });
-      });
-    })
-    .map(target_commands => {
-      // Find the command that builds the final output. Then work backwards and find
-      // all deps.
-      let outputMap = new Map(target_commands.map(cmd => [cmd.output, cmd]));
-      let primary = target_commands.filter(
-        cmd => cmd.env.CARGO_PRIMARY_PACKAGE
-      );
-      assert(primary.size === 1);
-      return new Node(findDeps(...primary).values());
-
-      function findDeps(cmd, alreadyIncluded = new Set()) {
-        if (alreadyIncluded.has(cmd.output)) return [];
-        alreadyIncluded.add(cmd.output);
-
-        let depCommands = [];
-        // Find rust deps.
-        depCommands.push(
-          ...cmd.args.filter(a => a.rustflag === "--extern").map(a => {
-            assert(outputMap.has(a.path));
-            return outputMap.get(a.path);
-          })
-        );
-        // Find static library deps.
-        let libDirs = cmd.args
-          .filter(a => a.rustflag === "-L")
-          .map(a => a.path);
-        depCommands.push(
-          ...cmd.args
-            .filter(a => a.rustflag === "-l" && a.kind === "static")
-            .map(a => a.name)
-            .map(name => {
-              for (const dir of libDirs) {
-                for (const pattern of [n => `lib${n}.a`, n => `${n}.lib`]) {
-                  const path = resolve(dir, pattern(name));
-                  if (outputMap.has(path)) {
-                    return outputMap.get(path);
+              return outputMap.get(a.path);
+            })
+          );
+          // Find static library deps.
+          let libDirs = cmd.args
+            .filter(a => a.rustflag === "-L")
+            .map(a => a.path);
+          depCommands.push(
+            ...cmd.args
+              .filter(a => a.rustflag === "-l" && a.kind === "static")
+              .map(a => a.name)
+              .map(name => {
+                for (const dir of libDirs) {
+                  for (const pattern of [n => `lib${n}.a`, n => `${n}.lib`]) {
+                    const path = resolve(dir, pattern(name));
+                    if (outputMap.has(path)) {
+                      return outputMap.get(path);
+                    }
                   }
                 }
-              }
-              assert.fail("Could not resolve deps.");
-            })
-            .filter(Boolean)
-        );
-        // Extract dep info that we need to keep associated with this cmd.
-        let deps = depCommands.map(dep => ({
-          dep_target_type: dep.target_type,
-          dep_name: dep.package_name,
-          dep_version: dep.package_version,
-          dep_version_is_latest: dep.package_version_is_latest,
-          dep_crate_name: dep.target_name
-        }));
-        cmd = new cmd.constructor(cmd, { deps });
-        // Return self + outputs;
-        return [
-          cmd,
-          ...depCommands
-            .map(dep => findDeps(dep, alreadyIncluded))
-            .reduce(...flat)
-        ];
-      }
-    })
-    .flat()
-    // Now drop the primary package itself.
-    .filter(cmd => !cmd.env.CARGO_PRIMARY_PACKAGE);
+                assert.fail("Could not resolve deps.");
+              })
+              .filter(Boolean)
+          );
+          // Apply dep-level overrides.
+          for (const override of current_overrides) {
+            if (override.kind !== "dep") continue;
+            depCommands = depCommands
+              .map(
+                dep =>
+                  override.match(dep, cmd)
+                    ? override.replace(dep, cmd, Array.from(target_commands))
+                    : dep
+              )
+              .filter(dep => dep !== null)
+              .reduce(...flat);
+          }
+          // Extract dep info that we need to keep associated with this cmd.
+          let deps = depCommands.map(dep => ({
+            dep_target_type: dep.target_type,
+            dep_name: dep.package_name,
+            dep_version: dep.package_version,
+            dep_version_is_latest: dep.package_version_is_latest,
+            dep_crate_name: dep.target_name
+          }));
+          cmd = new cmd.constructor(cmd, { deps });
+          // Return self + outputs;
+          return [
+            cmd,
+            ...depCommands
+              .map(dep => findDeps(dep, alreadyIncluded))
+              .reduce(...flat)
+          ];
+        }
+      })
+      .flat()
+      // Now drop the primary package itself.
+      .filter(cmd => !cmd.env.CARGO_PRIMARY_PACKAGE);
 
-  class RustArg extends Node {
-    init(items) {}
+    class RustArg extends Node {
+      init(items) {}
+      get mapKey() {
+        return JSON.stringify(this);
+      }
+    }
+
+    records = records
+      // Flatten all records to one arg per row.
+      .map(record => {
+        let {
+          package_name,
+          package_version,
+          package_version_is_latest,
+          target_name,
+          target_type,
+          target: target_triple,
+          deps,
+          args
+        } = record;
+        assert(target_type != null);
+        return [...args, ...deps].map(
+          a =>
+            new RustArg({
+              package_name,
+              package_version,
+              package_version_is_latest,
+              target_name,
+              target_type,
+              target_triple,
+              ...a
+            })
+        );
+      })
+      .flat();
+
+    // Apply record-level overrides.
+    for (const override of current_overrides) {
+      if (override.kind !== "record") continue;
+      records = records
+        .map(
+          record =>
+            override.match(record)
+              ? override.replace(record, Array.from(records))
+              : record
+        )
+        .filter(record => record !== null)
+        .reduce(...flat);
+    }
+
+    // Remember which records were affected by which overrides.
+    let override = current_overrides[current_overrides.length - 1];
+    let newRecords = new Map(records.map(r => [r.mapKey, r]));
+    if (currentRecords) {
+      // Compute the difference.
+      let added = new Map(newRecords),
+        dropped = new Map();
+      for (const [key, rec] of currentRecords) {
+        if (added.has(key)) added.delete(key);
+        else dropped.set(key, rec);
+      }
+      // Ask the override for a comment.
+      for (const map of [dropped, added]) {
+        let commentArgs = [
+          map === dropped ? "-" : "+",
+          { "-": [...dropped.values()], "+": [...added.values()] }
+        ];
+        for (let [key, rec] of map) {
+          let comment =
+            typeof override.comment === "function"
+              ? override.comment(rec, ...commentArgs)
+              : override.comment;
+          rec = new rec.constructor(rec, { comment });
+          recordOverrides.push([key, rec]);
+        }
+      }
+    }
+    currentRecords = newRecords;
   }
-  let args = commands
-    // Flatten all records to one arg per row.
-    .map(record => {
-      let {
-        package_name,
-        package_version,
-        package_version_is_latest,
-        target_name,
-        target_type,
-        target: target_triple,
-        deps,
-        args
-      } = record;
-      assert(target_type != null);
-      return [...args, ...deps].map(
-        a =>
-          new RustArg({
-            package_name,
-            package_version,
-            package_version_is_latest,
-            target_name,
-            target_type,
-            target_triple,
-            ...a
-          })
-      );
-    })
-    .flat()
-    // Remap paths.
-    .map(record => {
-      let { path } = record;
-      if (!path) return record;
-      // Use forward slashes.
-      path = path.replace(/\\/g, "/");
-      // Replace root by a variable.
-      path = path.replace(
-        /(^.*(?=\/registry\/src))|(^(.*\/)?third_party\/rust_crates(?=\/))/,
-        "$cargo_home"
-      );
-      return new record.constructor(record, { path });
-    });
+
+  // Add historical records to the current set but with the 'suppressed' flag on.
+  let records = new Node(
+    (function* merge() {
+      for (const [key, rec] of recordOverrides) {
+        yield new rec.constructor(rec, {
+          suppressed: !currentRecords.has(key)
+        });
+      }
+      for (const rec of currentRecords.values()) {
+        yield new rec.constructor(rec, { suppressed: false });
+      }
+    })()
+  );
+
+  // Remap paths.
+  records = records.map(record => {
+    let { path } = record;
+    if (!path) return record;
+    // Use forward slashes.
+    path = path.replace(/\\/g, "/");
+    // Replace root by a variable.
+    path = path.replace(
+      /(^.*(?=\/registry\/src))|(^(.*\/)?third_party\/rust_crates(?=\/))/,
+      "$cargo_home"
+    );
+    return new record.constructor(record, { path });
+  });
 
   // Build the GN scope from the ground up.
-  let root = new Root(args, Root.prototype.init);
+  let root = new Root(records, Root.prototype.init);
   // Render the gn file.
   let build_gn_lines = root.write();
   let build_gn = [...build_gn_lines].map(l => `${l}\n`).join("");
