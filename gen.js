@@ -113,6 +113,9 @@ class Node extends Set {
   }
 
   write() {
+    return this.writeInner();
+  }
+  writeInner() {
     return filterIter(
       deepFlatIter([
         this.writeHeader(),
@@ -132,15 +135,19 @@ class Node extends Set {
         deepFlatIter(
           mapIter(
             mapIter(this, ii => ii.write()),
-            ii => (!num++ ? ii : [this.writeSpacing(), ii])
+            ii => (!num++ ? ii : [this.writeSpacing(ii), ii])
           )
         ),
         l => l != null && this.writeItem(l)
       )
     ];
   }
-  writeSpacing() {
-    return this.gnScope instanceof Root ? [""] : [];
+  writeSpacing(nextLine) {
+    if (this.gnScope instanceof Root || /^\s*#/.test(nextLine)) {
+      return [""];
+    } else {
+      return [];
+    }
   }
   writeItem(str) {
     return `  ${str}`;
@@ -285,11 +292,13 @@ class Node extends Set {
 class Annotatable extends Node {
   constructor(...args) {
     super(...args);
-    if (typeof this.suppressed !== "boolean") {
+    if (this.suppressed === undefined) {
       let suppressed = undefined;
       for (const ii of this) {
         if (!(ii instanceof Set)) continue;
-        if (!ii.suppressed) {
+        if (ii.suppressed === null) {
+          // Explicitly not applicable.
+        } else if (!ii.suppressed) {
           suppressed = false;
           break;
         } else {
@@ -302,14 +311,36 @@ class Annotatable extends Node {
       if (!(ii instanceof Set)) continue;
       ii.parentSuppressed = this.suppressed;
     }
+
+    this.commentGroup = CommentGroup.fromItems(this);
+    if (!this.commentSet) {
+      this.commentSet = new CommentSet(this.commentGroup.values());
+    }
+    for (const ii of this) {
+      if (!(ii instanceof Set)) continue;
+      ii.parentCommentGroup = this.commentGroup;
+    }
   }
 
   write() {
-    if (!this.suppressed || this.parentSuppressed) {
-      return super.write();
+    let lines;
+    let suppressedHere = this.suppressed && !this.parentSuppressed;
+    if (!suppressedHere) {
+      lines = this.writeInner();
     } else {
-      return mapIter(super.write(), line => "# " + line);
+      lines = mapIter(this.writeInner(), line => "# " + line);
     }
+    lines = typeof lines === "string" ? [lines] : [...lines];
+    const comments = [...this.commentGroup]
+      .filter(Boolean)
+      .filter(
+        comment =>
+          !(this.parentCommentGroup && this.parentCommentGroup.has(comment))
+      )
+      .sort()
+      .map(comment => (suppressedHere ? "## " : "# ") + comment);
+    lines = [...comments, ...lines];
+    return lines;
   }
 }
 
@@ -378,8 +409,36 @@ class TargetTripleSet extends UniqueStringSet {
 }
 
 class CommentSet extends UniqueStringSet {
-  constructor(items) {
-    super(items.map(ii => ii.comment).filter(str => !!str));
+  static fromItems(items) {
+    let set = new CommentSet();
+    for (const ii of items) {
+      for (const jj of ii.commentSet) {
+        set.add(jj);
+      }
+    }
+    return set;
+  }
+}
+
+class CommentGroup extends Set {
+  static fromItems(items) {
+    let set = new CommentGroup();
+    let first = true;
+    for (const ii of items) {
+      const subset = ii.commentSet;
+      if (subset.size === 0) continue; // Empty set -> anything goes.
+      if (first) {
+        for (const jj of subset) {
+          set.add(jj);
+        }
+        first = false;
+      } else {
+        for (const jj of set) {
+          if (!subset.has(jj)) set.delete(jj);
+        }
+      }
+    }
+    return set;
   }
 }
 
@@ -402,10 +461,13 @@ class Root extends Node {
     return conditions;
   }
 
-  write() {
-    return mapIter(flatIter(mapIter(this, ii => ii.write())), line =>
-      line.trimRight()
-    );
+  writeInner() {
+    return [
+      ...mapIter(flatIter(mapIter(this, ii => ii.write())), line =>
+        line.trimRight()
+      ),
+      ""
+    ];
   }
 }
 
@@ -431,7 +493,13 @@ class Crate extends SortableScope {
           { gn_var: "crate_version", gn_value: this.crateVersion }
         ]) {
           gnRules = gnRules.add(
-            new GNRule({ gn_type: "string", ...gv, target_triple, suppressed })
+            new GNRule({
+              gn_type: "string",
+              ...gv,
+              target_triple,
+              suppressed: suppressed,
+              commentSet: new CommentSet()
+            })
           );
         }
       }
@@ -465,6 +533,18 @@ class Crate extends SortableScope {
 
 class GNRule extends Node {
   init(items) {
+    let commentSet = new CommentSet();
+    if (items.comment) {
+      commentSet.add(items.comment);
+    }
+    if (items.override_comment) {
+      commentSet.add(items.override_comment);
+    }
+    if (commentSet.size === 0) {
+      commentSet.add("");
+    }
+    this.commentSet = commentSet;
+
     switch (items.rustflag) {
       case "--cfg":
         let m = /^feature=(".*")$/.exec(items.value);
@@ -620,10 +700,10 @@ class GNVar extends Node {
 class GNVarAssignedValue extends SortableScope {
   init(items) {
     this.targetTriples = new TargetTripleSet(items);
-    this.commentSet = new CommentSet(items);
+    this.commentSet = CommentSet.fromItems(items);
   }
 
-  write() {
+  writeInner() {
     let { gn_var, gn_type, gn_value: out } = this;
     // TODO: gn_string() ... ?
     if (/string$/.test(gn_type)) out = JSON.stringify(out);
@@ -655,22 +735,21 @@ class GNVarPartialAssignment extends SortableScope {
       .map(GNVarPartialAssignmentSection)
       .sort();
   }
-  write() {
-    console.log(this.suppressed, this.parentSuppressed);
-    let prefix = this.suppressed && !this.parentSuppressed ? "# " : "";
+  writeInner() {
     if (!/^list/.test(this.gn_type)) {
-      return [prefix, ...this.map(ii => ii.write()).flat()];
+      return Array.from(this).map(ii => ii.write());
     } else {
       let childLines = this.writeChildren();
       if (childLines.length <= 1) {
         return [
-          prefix,
-          this.writeHeader(),
-          ...childLines.map(s => s.replace(/^\s*(.*),\s*$/, " $1 ")),
-          this.writeFooter()
-        ].join("");
+          [
+            this.writeHeader(),
+            ...childLines.map(s => s.replace(/^\s*(.*),\s*$/, " $1 ")),
+            this.writeFooter()
+          ].join("")
+        ];
       } else {
-        return super.write();
+        return super.writeInner();
       }
     }
   }
@@ -687,6 +766,8 @@ class GNVarPartialAssignment extends SortableScope {
   *sortKey() {
     yield* super.sortKey();
     assert(this.gn_var && this.gn_type);
+    yield this.commentSet.size; // Comments last.
+    yield* this.commentSet.values();
     yield this.gn_type === "string" ? 0 : 1; // Primitive values first.
     yield +(this.gn_var === "args"); // 'args' last.
     yield +/^extern|^(deps|libs)$/.test(this.gn_var); // deps last.
@@ -698,12 +779,7 @@ class GNVarPartialAssignmentSection extends SortableScope {
   init(items) {
     return items.sort();
   }
-  writeHeader() {
-    const comments = this.commentSet;
-    if (comments.size > 0) {
-      return Array.from(comments).map(comment => `# ${comment}`);
-    }
-  }
+  writeHeader() {}
   writeFooter() {}
   writeItem(str) {
     return str;
@@ -1007,7 +1083,8 @@ function parseClArgs([...args], cwd) {
 
 class Command extends Node {
   init(v) {
-    var { args, env, ...base } = v;
+    let { args, env, ...base } = v;
+    Object.assign(this, v);
 
     // Set package info.
     this.package_name = env.CARGO_PKG_NAME;
@@ -1123,7 +1200,7 @@ let overrides = [
   {
     comment: "Override: fuchsia stuff removed.",
     kind: "record",
-    match: record => Object.values(record).some(v => /fuchsia/.test(v)),
+    match: record => Object.values(record).some(v => /fuchsia|winapi/.test(v)),
     replace: (record, all_records) => null
   },
   {
@@ -1227,7 +1304,7 @@ function generate(trace_output) {
         );
       })
       .map(target_commands => {
-        let outputMap = new Map(commands.map(cmd => [cmd.output, cmd]));
+        let outputMap = new Map(target_commands.map(cmd => [cmd.output, cmd]));
         return target_commands.map(cmd => {
           // Replace object file inputs by the source file that they were generated
           // from.
@@ -1390,11 +1467,11 @@ function generate(trace_output) {
           { "-": [...dropped.values()], "+": [...added.values()] }
         ];
         for (let [key, rec] of map) {
-          let comment =
+          let override_comment =
             typeof override.comment === "function"
               ? override.comment(rec, ...commentArgs)
               : override.comment;
-          rec = new rec.constructor(rec, { comment });
+          rec = new rec.constructor(rec, { override_comment });
           recordOverrides.push([key, rec]);
         }
       }
