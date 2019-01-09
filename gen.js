@@ -282,7 +282,38 @@ class Node extends Set {
   }
 }
 
-class SortableScope extends Node {
+class Annotatable extends Node {
+  constructor(...args) {
+    super(...args);
+    if (typeof this.suppressed !== "boolean") {
+      let suppressed = undefined;
+      for (const ii of this) {
+        if (!(ii instanceof Set)) continue;
+        if (!ii.suppressed) {
+          suppressed = false;
+          break;
+        } else {
+          suppressed = true;
+        }
+      }
+      this.suppressed = suppressed;
+    }
+    for (const ii of this) {
+      if (!(ii instanceof Set)) continue;
+      ii.parentSuppressed = this.suppressed;
+    }
+  }
+
+  write() {
+    if (!this.suppressed || this.parentSuppressed) {
+      return super.write();
+    } else {
+      return mapIter(super.write(), line => "# " + line);
+    }
+  }
+}
+
+class SortableScope extends Annotatable {
   *sortKey() {
     switch (this.constructor) {
       case GNVarPartialAssignment:
@@ -625,12 +656,15 @@ class GNVarPartialAssignment extends SortableScope {
       .sort();
   }
   write() {
+    console.log(this.suppressed, this.parentSuppressed);
+    let prefix = this.suppressed && !this.parentSuppressed ? "# " : "";
     if (!/^list/.test(this.gn_type)) {
-      return this.map(ii => ii.write()).flat();
+      return [prefix, ...this.map(ii => ii.write()).flat()];
     } else {
       let childLines = this.writeChildren();
       if (childLines.length <= 1) {
         return [
+          prefix,
           this.writeHeader(),
           ...childLines.map(s => s.replace(/^\s*(.*),\s*$/, " $1 ")),
           this.writeFooter()
@@ -672,7 +706,7 @@ class GNVarPartialAssignmentSection extends SortableScope {
   }
   writeFooter() {}
   writeItem(str) {
-    return (this.suppressed ? "# " : "") + str;
+    return str;
   }
   *sortKey() {
     yield* super.sortKey();
