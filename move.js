@@ -4,7 +4,7 @@ const { dirname, resolve, relative } = require("path");
 const dirs = require(`${__dirname}/work/package_dirs.json`);
 
 const cargo_home_src = `${__dirname}/work/cargo_home`;
-const cargo_home_dst = `${__dirname}/work/cargo_home2`;
+const cargo_home_dst = `${__dirname}/work/rust_crates`;
 //const cargo_home_dst = `d:/deno3/third_party/rust_crates`;
 
 for (const src of dirs) {

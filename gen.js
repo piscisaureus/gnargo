@@ -463,10 +463,9 @@ class Root extends Node {
 
   writeInner() {
     return [
-      ...mapIter(flatIter(mapIter(this, ii => ii.write())), line =>
+      ...mapIter(deepFlatIter(mapIter(this, ii => [ii.write(), ""])), line =>
         line.trimRight()
-      ),
-      ""
+      )
     ];
   }
 }
@@ -540,9 +539,7 @@ class GNRule extends Node {
     if (items.override_comment) {
       commentSet.add(items.override_comment);
     }
-    if (commentSet.size === 0) {
-      commentSet.add("");
-    }
+    commentSet.add("");
     this.commentSet = commentSet;
 
     switch (items.rustflag) {
@@ -766,6 +763,7 @@ class GNVarPartialAssignment extends SortableScope {
   *sortKey() {
     yield* super.sortKey();
     assert(this.gn_var && this.gn_type);
+    yield +this.suppressed; // Suppressed rules last.
     yield this.commentSet.size; // Comments last.
     yield* this.commentSet.values();
     yield this.gn_type === "string" ? 0 : 1; // Primitive values first.
@@ -786,6 +784,7 @@ class GNVarPartialAssignmentSection extends SortableScope {
   }
   *sortKey() {
     yield* super.sortKey();
+    yield +this.suppressed; // Suppressed rules last.
     yield this.commentSet.size;
     yield* this.commentSet.values();
   }
@@ -828,6 +827,7 @@ class Condition extends SortableScope {
   }
   *sortKey() {
     yield* super.sortKey();
+    yield +this.suppressed; // Suppressed scopes last.
     // More generic.
     yield (1000 * this.gn_if.length) / this.targetTriples.size;
     // More inclusive.
@@ -1089,6 +1089,7 @@ class Command extends Node {
     // Set package info.
     this.package_name = env.CARGO_PKG_NAME;
     this.package_version = env.CARGO_PKG_VERSION;
+    this.package_dir = env.CARGO_MANIFEST_DIR;
     this.package_id = `${this.package_name}-${this.package_version}`;
 
     // Env.
@@ -1195,12 +1196,18 @@ let overrides = [
     kind: "record",
     match: record => Object.values(record).some(v => /owning[-_]ref/.test(v)),
     replace: (record, all_records) => null,
-    comment: "Override: don't depend on 'owning-ref'."
+    comment: "Override: avoid dependency on on 'owning-ref'."
   },
   {
-    comment: "Override: fuchsia stuff removed.",
+    kind: "dep",
+    match: dep => dep.target_name === "ring-test",
+    replace: (record, all_records) => null,
+    comment: "Override: don't build 'ring-test's .c files."
+  },
+  {
+    comment: "Override: no fuchsia stuff.",
     kind: "record",
-    match: record => Object.values(record).some(v => /fuchsia|winapi/.test(v)),
+    match: record => Object.values(record).some(v => /fuchsia/.test(v)),
     replace: (record, all_records) => null
   },
   {
@@ -1413,6 +1420,7 @@ function generate(trace_output) {
           package_name,
           package_version,
           package_version_is_latest,
+          package_dir,
           target_name,
           target_type,
           target: target_triple,
@@ -1426,6 +1434,7 @@ function generate(trace_output) {
               package_name,
               package_version,
               package_version_is_latest,
+              package_dir,
               target_name,
               target_type,
               target_triple,
@@ -1515,7 +1524,10 @@ function generate(trace_output) {
 
   // Build a list of package paths.
   let package_dirs = Array.from(
-    commands.map(cmd => cmd.env.CARGO_MANIFEST_DIR)
+    records
+      .filter(rec => !rec.suppressed)
+      .map(rec => rec.package_dir)
+      .filter(Boolean)
   ).sort();
 
   return { build_gn, package_dirs };
