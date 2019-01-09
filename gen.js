@@ -285,9 +285,9 @@ class Node extends Set {
 class SortableScope extends Node {
   *sortKey() {
     switch (this.constructor) {
-      case GNVarConditionalAssignment:
+      case GNVarPartialAssignment:
         return yield 100;
-      case GNVarConditionalAssignmentSection:
+      case GNVarPartialAssignmentSection:
         return yield 110;
       case GNVarAssignedValue:
         return yield 130;
@@ -311,8 +311,8 @@ class SortableScope extends Node {
   static compare(a, b) {
     // let dn = 0,
     // d =
-    //   a instanceof GNVarConditionalAssignmentSection &&
-    //   b instanceof GNVarConditionalAssignmentSection;
+    //   a instanceof GNVarPartialAssignmentSection &&
+    //   b instanceof GNVarPartialAssignmentSection;
     // d = d && a.package_name === "winapi";
     // d = d && b.package_name === "winapi";
     // if (!a.sortKey) console.error(a.constructor.name);
@@ -563,7 +563,7 @@ class GNVar extends Node {
 
     // Group by the same key twice so we get buckets with exactly one entry.
     // This lets us flatten away the Condition object in the end and
-    // remap it to a ConditionalAssignment.
+    // remap it to a PartialAssignment.
     return assignedValues
       .groupBy({ key: "targetTriples" })
       .groupBy({ key: "targetTriples" })
@@ -582,7 +582,7 @@ class GNVar extends Node {
         return condition.assign({ isFirstAssignment: isFirstAny });
       })
       .flat()
-      .map(GNVarConditionalAssignment);
+      .map(GNVarPartialAssignment);
   }
 }
 
@@ -613,7 +613,7 @@ class GNVarAssignedValue extends SortableScope {
   }
 }
 
-class GNVarConditionalAssignment extends SortableScope {
+class GNVarPartialAssignment extends SortableScope {
   constructor(...args) {
     super(...args);
   }
@@ -621,14 +621,11 @@ class GNVarConditionalAssignment extends SortableScope {
     return items
       .groupBy({ key: "commentSet" })
       .groupBy({ key: "suppressed" }, true)
-      .map(GNVarConditionalAssignmentSection)
+      .map(GNVarPartialAssignmentSection)
       .sort();
   }
   write() {
     if (!/^list/.test(this.gn_type)) {
-      //return [`${this.gn_var} =`, ...this.map(ii => ii.write()).flat()].join(
-      //  " "
-      //);
       return this.map(ii => ii.write()).flat();
     } else {
       let childLines = this.writeChildren();
@@ -663,7 +660,7 @@ class GNVarConditionalAssignment extends SortableScope {
   }
 }
 
-class GNVarConditionalAssignmentSection extends SortableScope {
+class GNVarPartialAssignmentSection extends SortableScope {
   init(items) {
     return items.sort();
   }
