@@ -760,6 +760,9 @@ class GNVarPartialAssignment extends SortableScope {
   writeFooter() {
     return `]`;
   }
+  writeSpacing() {
+    return [""];
+  }
   *sortKey() {
     yield* super.sortKey();
     assert(this.gn_var && this.gn_type);
