@@ -1,12 +1,12 @@
 "use strict";
 
 const assert = require("assert");
-const { writeFileSync, linkSync, renameSync } = require("fs");
+const { writeFileSync, linkSync, renameSync, createReadStream } = require("fs");
 const { spawn, spawnSync, execFileSync } = require("child_process");
 const { createServer } = require("net");
-const { basename, dirname, extname, resolve } = require("path");
+const { basename, dirname, extname, resolve, relative } = require("path");
 const { writeFile, execFile, mkdir, mkdtemp } = require("./lib/async");
-const { exeSuffix, main } = require("./lib/util");
+const { exeSuffix, main, walkDir, iterLines } = require("./lib/util");
 
 const SRC_DIR = "d:/deno3";
 const WORK_DIR = `${__dirname}/work`;
@@ -316,6 +316,19 @@ async function traceTargetBuild(target) {
       if (proc.exitCode !== 0) return proc;
     } else {
       file_names.forEach(writeFakeDepFile);
+    }
+
+    if (target) {
+      const list = (command.source_file_link_attributes = []);
+      for await (const entry of walkDir(cwd)) {
+        const ext = extname(entry.name);
+        if (ext !== ".rs") continue;
+        const stream = createReadStream(entry.path, { encoding: "utf8" });
+        nextLine: for await (const line of iterLines(stream)) {
+          if (!/^\s*#\[link\s*\(/.exec(line)) continue;
+          list.push({ path: entry.path, line });
+        }
+      }
     }
 
     if (crate_name === "build_script_build") {
