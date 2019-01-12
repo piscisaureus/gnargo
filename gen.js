@@ -1,7 +1,7 @@
 "use strict";
 
 const assert = require("assert");
-const { resolve, basename, extname, dirname } = require("path");
+const { resolve, basename, extname, dirname, relative } = require("path");
 const { readFileSync, writeFileSync, readDirSync } = require("fs");
 const { inspect } = require("util");
 const { execFile, readFile, writeFile } = require("./lib/async");
@@ -971,8 +971,59 @@ function parseCargoDirectives(lines) {
   return args;
 }
 
+function parseSourceLinkAttributes(entries, cmd) {
+  const { cwd, target } = cmd;
+  return entries
+    .map(({ path, line }) => {
+      const relPath = relative(cwd, path).replace(/\\/g, "/");
+      const m = /^\s*#\[link\((.*)\)\]\s*$/.exec(line);
+      if (!m) return;
+      const props = {};
+      let triples;
+      const parts = m[1].trim().split(/\s*,\s*/);
+      for (const part of parts) {
+        const kv = /^\s*(name|kind)\s*=\s*(.*)\s*$/.exec(part);
+        if (!kv) {
+          throw new Error(`Failed to parse '${part}' of '${line}'`);
+        }
+        const key = kv[1],
+          value = JSON.parse(kv[2]);
+        props[key] = value;
+        if (key === "name") {
+          triples = {
+            Security: ["x86_64-apple-darwin"],
+            advapi32: ["x86_64-pc-windows-msvc"],
+            bsd: [],
+            c: [],
+            errno_dragonfly: [],
+            fdio: [],
+            libcmt: [],
+            m: [],
+            msvcrt: [],
+            network: [],
+            ole32: ["x86_64-pc-windows-msvc"],
+            oleaut32: ["x86_64-pc-windows-msvc"],
+            pthread: [],
+            root: [],
+            rt: [],
+            rt: [],
+            util: []
+          }[value];
+          if (!triples) {
+            throw new Error(`Don't know what targets to apply '${line}' to.`);
+          }
+          if (!triples.includes(target)) return;
+        }
+      }
+      const comment = `${relPath}: \`${line.trim()}\`.`;
+      return { rustflag: "-l", value: props.name, ...props, comment };
+    })
+    .filter(Boolean);
+}
+
 function mergeRustcArgs(...argSets) {
-  let getKey = arg => [arg.rustflag || arg.source, arg.value].join("\0");
+  let getKey = arg =>
+    [arg.rustflag || arg.source, arg.value, arg.comment || ""].join("\0");
   let merge = (...sets) =>
     new Map(
       [...sets]
@@ -1101,7 +1152,12 @@ class Command extends Node {
     // Set args.
     switch (base.program) {
       case "rustc":
-        this.args = new Node(parseRustcArgs(v.args).values());
+        let parsed_args = parseRustcArgs(v.args);
+        let attrs = v.source_file_link_attributes;
+        if (attrs) {
+          parsed_args.push(...parseSourceLinkAttributes(attrs, v));
+        }
+        this.args = new Node(parsed_args.values());
         break;
       case "build-script-build":
         this.output_args = new Node(
