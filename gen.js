@@ -1015,7 +1015,7 @@ function parseSourceLinkAttributes(entries, cmd) {
           if (!triples.includes(target)) return;
         }
       }
-      const comment = `${relPath}: \`${line.trim()}\`.`;
+      const comment = `Per the #[link(...)] attribute found in '${relPath}'.`;
       return { rustflag: "-l", value: props.name, ...props, comment };
     })
     .filter(Boolean);
@@ -1261,7 +1261,7 @@ let overrides = [
     kind: "dep",
     match: dep => dep.target_name === "ring-test",
     replace: (record, all_records) => null,
-    comment: "Override: don't build 'ring-test's .c files."
+    comment: "Override: don't build 'ring-test' static library."
   },
   {
     comment: "Override: no fuchsia stuff.",
@@ -1276,8 +1276,7 @@ let overrides = [
       return (
         rec.target_name === "ring-core" &&
         /windows/.test(rec.target_triple) &&
-        rec.libflag &&
-        rec.output
+        rec.libflag
       );
     },
     replace(rec) {
@@ -1286,6 +1285,28 @@ let overrides = [
         rec, // Insert -- don't replace.
         new rec.constructor({
           cflag: "-Wno-ignored-pragma-intrinsic",
+          ...keep,
+          force: true
+        })
+      ];
+    }
+  },
+  {
+    comment: `Supress "warning: '_GNU_SOURCE' macro redefined."`,
+    kind: "record",
+    match(rec) {
+      return (
+        rec.target_name === "ring-core" &&
+        /linux/.test(rec.target_triple) &&
+        rec.arflag
+      );
+    },
+    replace(rec) {
+      let { output, value, path, libflag, ...keep } = rec;
+      return [
+        rec, // Insert -- don't replace.
+        new rec.constructor({
+          cflag: "-Wno-macro-redefined",
           ...keep,
           force: true
         })
