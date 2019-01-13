@@ -37,11 +37,7 @@ for (const base_path of maybe_ignore) {
       );
     }
   } else {
-    let ignore_path = `/${base_path}`;
-    if (is_dir) {
-      ignore_path += "/";
-    }
-    ignore.push(ignore_path);
+    ignore.push(base_path + (is_dir ? "/" : ""));
   }
 }
 writeFileSync(
