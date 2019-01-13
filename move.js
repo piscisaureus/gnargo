@@ -1,4 +1,11 @@
-const { mkdirSync, renameSync } = require("fs");
+const {
+  mkdirSync,
+  renameSync,
+  readdirSync,
+  statSync,
+  existsSync,
+  writeFileSync
+} = require("fs");
 const { dirname, resolve, relative } = require("path");
 
 const dirs = require(`${__dirname}/work/package_dirs.json`);
@@ -15,3 +22,29 @@ for (const src of dirs) {
   mkdirSync(dst_parent, { recursive: true });
   renameSync(src, dst);
 }
+
+const maybe_ignore = [""];
+const ignore = [];
+for (const base_path of maybe_ignore) {
+  const is_dir = statSync(`${cargo_home_src}${base_path}`).isDirectory();
+  const exists = existsSync(`${cargo_home_dst}${base_path}`);
+  if (exists) {
+    if (is_dir) {
+      maybe_ignore.push(
+        ...readdirSync(`${cargo_home_src}${base_path}`).map(
+          name => `${base_path}/${name}`
+        )
+      );
+    }
+  } else {
+    let ignore_path = `/${base_path}`;
+    if (is_dir) {
+      ignore_path += "/";
+    }
+    ignore.push(ignore_path);
+  }
+}
+writeFileSync(
+  `${cargo_home_dst}/.gitignore`,
+  ignore.map(l => `${l}\n`).join("")
+);
