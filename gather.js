@@ -46,5 +46,8 @@ for (const base_path of maybe_ignore) {
 }
 writeFileSync(
   `${cargo_home_dst}/.gitignore`,
-  ignore.map(l => `${l}\n`).join("")
+  ignore
+    .sort()
+    .map(l => `${l}\n`)
+    .join("")
 );
