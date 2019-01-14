@@ -554,10 +554,13 @@ class GNRule extends Node {
         }
         return { gn_type: "list_string", gn_var: "cfg", gn_value: items.value };
       case "--cap-lints":
+      case "--edition":
         return {
           gn_type: "list_raw",
           gn_var: "args",
-          gn_value: ["--cap-lints", items.value].map(JSON.stringify).join(",\n")
+          gn_value: [items.rustflag, items.value]
+            .map(JSON.stringify)
+            .join(",\n")
         };
       case "-l": {
         let { name, kind, target_triple } = items;
