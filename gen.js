@@ -554,7 +554,6 @@ class GNRule extends Node {
         }
         return { gn_type: "list_string", gn_var: "cfg", gn_value: items.value };
       case "--cap-lints":
-      case "--edition":
         return {
           gn_type: "list_raw",
           gn_var: "args",
@@ -562,6 +561,15 @@ class GNRule extends Node {
             .map(JSON.stringify)
             .join(",\n")
         };
+      case "--edition": {
+        const edition = items.value;
+        if (edition === "2018") return;
+        return {
+          gn_type: "string",
+          gn_var: "edition",
+          gn_value: edition
+        };
+      }
       case "-l": {
         let { name, kind, target_triple } = items;
         if (kind === "static") {
@@ -1398,6 +1406,19 @@ function generate(trace_output) {
               }
             )
         );
+      })
+      .map(target_commands => {
+        // Add a default '--edition' arg to rust targets that don't have it.
+        return target_commands.map(cmd => {
+          if (
+            cmd.program !== "rustc" ||
+            cmd.args.filter(a => a.rustflag === "--edition").size > 0
+          )
+            return cmd;
+          return new Node(cmd, {
+            args: cmd.args.add({ rustflag: "--edition", value: "2015" })
+          });
+        });
       })
       .map(target_commands => {
         let outputMap = new Map(target_commands.map(cmd => [cmd.output, cmd]));
