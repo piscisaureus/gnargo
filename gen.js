@@ -1255,13 +1255,13 @@ let overrides = [
     kind: "dep",
     match: dep => dep.package_name === "owning_ref",
     replace: () => null,
-    comment: "Override: avoid dependency on on 'owning-ref'."
+    comment: "Override: avoid dependency on on 'owning_ref'."
   },
   {
     kind: "record",
     match: record => Object.values(record).some(v => /owning[-_]ref/.test(v)),
     replace: (record, all_records) => null,
-    comment: "Override: avoid dependency on on 'owning-ref'."
+    comment: "Override: avoid dependency on on 'owning_ref'."
   },
   {
     kind: "dep",
