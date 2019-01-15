@@ -1018,7 +1018,8 @@ function parseSourceLinkAttributes(entries, cmd) {
             root: [],
             rt: [],
             rt: [],
-            util: []
+            util: [],
+            zircon: []
           }[value];
           if (!triples) {
             throw new Error(`Don't know what targets to apply '${line}' to.`);
