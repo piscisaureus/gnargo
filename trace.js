@@ -25,7 +25,15 @@ const temp_base_dir = have_dir(WORK_DIR, "temp");
 const temp_dir = resolve(mkdtemp.sync(`${temp_base_dir}/`));
 const shim_dir = have_dir(temp_dir, "shim");
 
+let manifest_path = resolve(SRC_DIR, "Cargo.toml");
+let base_env = {
+  ...keysToUpperCase(process.env),
+  CARGO_HOME: cargo_home_dir
+};
+
 main(async () => {
+  await cargoFetch();
+
   let commands = [];
   for (const target of TARGETS) {
     // It's easy to do this in parallel but cargo already parallelizes pretty well.
@@ -41,6 +49,15 @@ main(async () => {
   });
 });
 
+async function cargoFetch() {
+  // TODO: figure out how to do `stdio: "inherit"` with async execFile.
+  execFileSync("cargo", ["fetch", "--manifest-path", manifest_path], {
+    cwd: temp_dir,
+    env: base_env,
+    stdio: "inherit"
+  });
+}
+
 async function traceTargetBuild(target) {
   const cargo_target_dir = have_dir(temp_dir, `target_${target}`);
 
@@ -53,14 +70,12 @@ async function traceTargetBuild(target) {
   let port = shimServer.address().port;
 
   let target_is_win = /windows/.test(target);
-  let base_env = keysToUpperCase(process.env);
-  base_env = {
+  let target_env = {
     ...base_env,
-    CARGO_HOME: cargo_home_dir,
     CARGO_TARGET_DIR: cargo_target_dir
   };
   let shim_env = {
-    ...base_env,
+    ...target_env,
     SHIM_PORT: `${port}`,
     RUSTC: writeShim(`${shim_dir}/rustc${exeSuffix}`, true),
     RUSTC_WRAPPER: ""
@@ -84,7 +99,6 @@ async function traceTargetBuild(target) {
 
   const commands = [];
 
-  let manifest_path = resolve(SRC_DIR, "Cargo.toml");
   let cargo = spawn(
     "cargo",
     [
@@ -276,7 +290,7 @@ async function traceTargetBuild(target) {
 
   async function rustc(command) {
     let { cwd, args, input } = command;
-    let real_env = { ...base_env, ...command.env };
+    let real_env = { ...target_env, ...command.env };
 
     let crate_name, out_dir, target, meta;
     for (const [i, arg] of args.entries()) {
