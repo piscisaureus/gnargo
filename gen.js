@@ -1234,35 +1234,40 @@ class Command extends Node {
   }
 }
 
-let overrides = [
-  {
-    init() {
-      this.old = new Map();
-      this.latest = null;
-    },
-    packageId(rec) {
-      return `${rec.package_name}-${rec.package_version}`;
-    },
-    kind: "dep",
-    match(dep, depender) {
-      return dep.target_name === "rand" && !dep.package_version_is_latest;
-    },
-    replace(dep, depender, candidates) {
-      let r = candidates.find(
-        c => c.target_name === dep.target_name && c.package_version_is_latest
-      );
-      this.old.set(this.packageId(depender), dep.package_version);
-      this.latest = r.package_version;
-      return r;
-    },
-    comment(rec, d, ch) {
-      let old = this.old.get(this.packageId(rec));
-      return (
-        `Override: use rand v${this.latest} instead` +
-        (old ? ` of v${old}.` : ".")
-      );
-    }
+let use_latest = target_name => ({
+  target_name,
+  init() {
+    this.old = new Map();
+    this.latest = null;
   },
+  packageId(rec) {
+    return `${rec.package_name}-${rec.package_version}`;
+  },
+  kind: "dep",
+  match(dep, depender) {
+    return (
+      dep.target_name === this.target_name && !dep.package_version_is_latest
+    );
+  },
+  replace(dep, depender, candidates) {
+    let r = candidates.find(
+      c => c.target_name === dep.target_name && c.package_version_is_latest
+    );
+    this.old.set(this.packageId(depender), dep.package_version);
+    this.latest = r.package_version;
+    return r;
+  },
+  comment(rec, d, ch) {
+    let old = this.old.get(this.packageId(rec));
+    return (
+      `Override: use ${this.target_name} v${this.latest} instead` +
+      (old ? ` of v${old}.` : ".")
+    );
+  }
+});
+let overrides = [
+  use_latest("rand"),
+  use_latest("rand_core"),
   {
     kind: "dep",
     match: dep => dep.package_name === "owning_ref",
