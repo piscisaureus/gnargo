@@ -8,7 +8,7 @@ const { basename, dirname, extname, resolve, relative } = require("path");
 const { writeFile, execFile, mkdir, mkdtemp } = require("./lib/async");
 const { exeSuffix, main, walkDir, iterLines } = require("./lib/util");
 
-const SRC_DIR = "d:/deno3";
+const SRC_DIR = "d:/deno";
 const WORK_DIR = `${__dirname}/work`;
 
 let TARGETS = [
