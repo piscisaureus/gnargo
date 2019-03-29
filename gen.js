@@ -133,9 +133,8 @@ class Node extends Set {
     return [
       ...mapIter(
         deepFlatIter(
-          mapIter(
-            mapIter(this, ii => ii.write()),
-            ii => (!num++ ? ii : [this.writeSpacing(ii), ii])
+          mapIter(mapIter(this, ii => ii.write()), ii =>
+            !num++ ? ii : [this.writeSpacing(ii), ii]
           )
         ),
         l => l != null && this.writeItem(l)
@@ -876,14 +875,13 @@ function parseRustcArgs(args) {
   // 1. Break up combined shorthand flags (`-OgvV`) into individual ones.
   return (
     args
-      .map(
-        arg =>
-          /^-[^-]/.test(arg)
-            ? arg
-                .slice(1)
-                .split("")
-                .map(a => `-${a}`)
-            : arg
+      .map(arg =>
+        /^-[^-]/.test(arg)
+          ? arg
+              .slice(1)
+              .split("")
+              .map(a => `-${a}`)
+          : arg
       )
       .reduce(...flat)
       // 2. Canonicalize.
@@ -1370,11 +1368,10 @@ function generate(trace_output) {
         const versions = packageCommands.groupBy({ key: "package_version" });
         const latest_version = versions
           .map(pkg => pkg.package_version)
-          .reduce(
-            (latest, version) =>
-              !latest || semverOrdinal(version) > semverOrdinal(latest)
-                ? version
-                : latest
+          .reduce((latest, version) =>
+            !latest || semverOrdinal(version) > semverOrdinal(latest)
+              ? version
+              : latest
           );
         return packageCommands.map(
           cmd =>
@@ -1461,10 +1458,12 @@ function generate(trace_output) {
           let depCommands = [];
           // Find rust deps.
           depCommands.push(
-            ...cmd.args.filter(a => a.rustflag === "--extern").map(a => {
-              assert(outputMap.has(a.path));
-              return outputMap.get(a.path);
-            })
+            ...cmd.args
+              .filter(a => a.rustflag === "--extern")
+              .map(a => {
+                assert(outputMap.has(a.path));
+                return outputMap.get(a.path);
+              })
           );
           // Find static library deps.
           let libDirs = cmd.args
@@ -1491,11 +1490,10 @@ function generate(trace_output) {
           for (const override of current_overrides) {
             if (override.kind !== "dep") continue;
             depCommands = depCommands
-              .map(
-                dep =>
-                  override.match(dep, cmd)
-                    ? override.replace(dep, cmd, Array.from(target_commands))
-                    : dep
+              .map(dep =>
+                override.match(dep, cmd)
+                  ? override.replace(dep, cmd, Array.from(target_commands))
+                  : dep
               )
               .filter(dep => dep !== null)
               .reduce(...flat);
@@ -1564,11 +1562,10 @@ function generate(trace_output) {
     for (const override of current_overrides) {
       if (override.kind !== "record") continue;
       records = records
-        .map(
-          record =>
-            override.match(record)
-              ? override.replace(record, Array.from(records))
-              : record
+        .map(record =>
+          override.match(record)
+            ? override.replace(record, Array.from(records))
+            : record
         )
         .filter(record => record !== null)
         .reduce(...flat);
