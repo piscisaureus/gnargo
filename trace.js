@@ -254,7 +254,7 @@ async function traceTargetBuild(target) {
 
   async function customBuild(command) {
     let { cwd, args, exe, env } = command;
-    if (env.CARGO_PKG_NAME === "deno") {
+    if (/^deno/.test(env.CARGO_PKG_NAME)) {
       command.output_cargo_directives = [];
       return; // Don't run Deno's own custom build script.
     }

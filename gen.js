@@ -1529,6 +1529,8 @@ function generate(trace_output) {
     }
 
     records = records
+      // Exclude deno and deno_core crates.
+      .filter(record => !/^deno/.test(record.package_name))
       // Flatten all records to one arg per row.
       .map(record => {
         let {
