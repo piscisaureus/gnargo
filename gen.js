@@ -987,6 +987,7 @@ function parseSourceLinkAttributes(entries, cmd) {
       const relPath = relative(cwd, path).replace(/\\/g, "/");
       const m = /^\s*#\[link\((.*)\)\]\s*$/.exec(line);
       if (!m) return;
+      if (/wasm_import_module/.test(line)) return;
       const props = {};
       let triples;
       const parts = m[1].trim().split(/\s*,\s*/);
