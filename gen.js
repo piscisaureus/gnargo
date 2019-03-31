@@ -37,11 +37,13 @@ main(async () => {
 
 async function findGn(commands) {
   let denoSourceDir = commands
-    .filter(c => c.env.CARGO_PRIMARY_PACKAGE)
-    .map(c => c.env.CARGO_MANIFEST_DIR)
+    .map(c => c.cwd)
+    .filter(Boolean)
+    .sort((a, b) => a.length - b.length)
     .shift();
+  console.log(denoSourceDir);
   return (await searchDir(
-    `${denoSourceDir}/buildtools`,
+    `${denoSourceDir}/third_party/v8/buildtools`,
     f => f.isFile() && f.name === `gn${exeSuffix}`
   )).path;
 }
@@ -1005,9 +1007,13 @@ function parseSourceLinkAttributes(entries, cmd) {
             advapi32: ["x86_64-pc-windows-msvc"],
             bsd: [],
             c: [],
+            "c++": ["x86_64-apple-darwin"],
+            dbghelp: ["x86_64-pc-windows-msvc"],
+            deno: [],
             errno_dragonfly: [],
             fdio: [],
             libcmt: [],
+            libdeno: [],
             m: [],
             msvcrt: [],
             network: [],
@@ -1017,7 +1023,10 @@ function parseSourceLinkAttributes(entries, cmd) {
             root: [],
             rt: [],
             rt: [],
+            shlwapi: ["x86_64-pc-windows-msvc"],
             util: [],
+            winmm: ["x86_64-pc-windows-msvc"],
+            ws2_32: ["x86_64-pc-windows-msvc"],
             zircon: []
           }[value];
           if (!triples) {
@@ -1449,8 +1458,8 @@ function generate(trace_output) {
         let primary = target_commands.filter(
           cmd => cmd.env.CARGO_PRIMARY_PACKAGE
         );
-        assert(primary.size === 1);
-        return new Node(findDeps(...primary).values());
+        let alreadyIncluded = new Set();
+        return primary.map(p => new Node(findDeps(p).values())).flat();
 
         function findDeps(cmd, alreadyIncluded = new Set()) {
           if (alreadyIncluded.has(cmd.output)) return [];
@@ -1518,7 +1527,7 @@ function generate(trace_output) {
         }
       })
       .flat()
-      // Now drop the primary package itself.
+      // Now drop the primary packages themselves.
       .filter(cmd => !cmd.env.CARGO_PRIMARY_PACKAGE);
 
     class RustArg extends Node {
