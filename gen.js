@@ -1276,6 +1276,7 @@ let use_latest = target_name => ({
 let overrides = [
   use_latest("rand"),
   use_latest("rand_core"),
+  use_latest("nix"),
   {
     kind: "dep",
     match: dep => dep.package_name === "owning_ref",
