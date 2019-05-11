@@ -1273,7 +1273,28 @@ let use_latest = target_name => ({
     );
   }
 });
+
+let windows_only = target_name => [
+  {
+    kind: "dep",
+    match: dep =>
+      dep.target_name === target_name && !/windows/.test(dep.target),
+    replace: () => null,
+    comment: `Override: '${target_name}' should be a windows-only dependency.`
+  },
+  {
+    kind: "record",
+    match: record =>
+      record.target_name === target_name &&
+      !/windows/.test(record.target_triple),
+    replace: () => null,
+    invisible: true
+  }
+];
+
 let overrides = [
+  ...windows_only("winapi"),
+  ...windows_only("kernel32"),
   use_latest("rand"),
   use_latest("rand_core"),
   use_latest("nix"),
@@ -1361,16 +1382,28 @@ function generate(trace_output) {
       return root;
     });
 
+  const explicit_overrides = [];
+  const invisible_overrides = [];
   for (const override of overrides) {
     override.init && override.init();
+
+    if (override.invisible) {
+      invisible_overrides.push(override);
+    } else {
+      explicit_overrides.push(override);
+    }
   }
 
   let currentRecords;
   let recordOverrides = [];
 
   let override_baseline = { kind: null, baseline: true };
-  for (let oi = 0; oi <= overrides.length; oi++) {
-    const current_overrides = [override_baseline, ...overrides.slice(0, oi)];
+  for (let oi = 0; oi <= explicit_overrides.length; oi++) {
+    const current_overrides = [
+      override_baseline,
+      ...invisible_overrides,
+      ...explicit_overrides.slice(0, oi)
+    ];
 
     let records = commands
       .filter(cmd => cmd.package_name)
