@@ -639,23 +639,59 @@ class GNRule extends Node {
           gn_value: gn_label
         };
       }
-      case "rust_crate": {
-        let { dep_version, dep_crate_name, dep_version_is_latest } = items;
-        if (dep_version_is_latest) {
-          return {
-            gn_type: "list_string",
-            gn_var: "extern",
-            gn_value: `:${dep_crate_name}`
-          };
-        } else {
-          const $ = JSON.stringify;
+      case "rust_rlib": {
+        const $ = JSON.stringify;
+        const { dep_crate_name, dep_version, dep_version_is_latest } = items;
+        if (!dep_version_is_latest) {
           return {
             gn_type: "list_raw",
-            gn_var: "extern_version",
+            gn_var: "extern",
             gn_value: [
               `{`,
+              `  label = ":${dep_crate_name}-${dep_version}"`,
               `  crate_name = ${$(dep_crate_name)}`,
+              `  crate_type = "rlib"`,
               `  crate_version = ${$(dep_version)}`,
+              `}`
+            ].join("\n")
+          };
+        } else {
+          return {
+            gn_type: "list_string",
+            gn_var: "extern_rlib",
+            gn_value: `${dep_crate_name}`
+          };
+        }
+      }
+      case "rust_proc_macro": {
+        const $ = JSON.stringify;
+        const { dep_crate_name, dep_version, dep_version_is_latest } = items;
+        const dep_crate_type = {
+          rust_rlib: "rlib",
+          rust_proc_macro: "proc_macro"
+        }[dep_target_type];
+        if (!dep_version_is_latest) {
+          return {
+            gn_type: "list_raw",
+            gn_var: "extern",
+            gn_value: [
+              `{`,
+              `  label = ":${dep_crate_name}-${dep_version}"`,
+              `  crate_name = ${$(dep_crate_name)}`,
+              `  crate_type = "proc_macro"`,
+              `  crate_version = ${$(dep_version)}`,
+              `}`
+            ].join("\n")
+          };
+        } else {
+          return {
+            gn_type: "list_raw",
+            gn_var: "extern",
+            gn_value: [
+              `{`,
+              `  label = ":${dep_crate_name}"`,
+              `  crate_name = ${$(dep_crate_name)}`,
+              `  crate_type = "proc_macro"`,
               `}`
             ].join("\n")
           };
@@ -784,6 +820,7 @@ class GNVarPartialAssignment extends SortableScope {
     yield this.gn_type === "string" ? 0 : 1; // Primitive values first.
     yield +(this.gn_var === "args"); // 'args' last.
     yield +/^extern|^(deps|libs)$/.test(this.gn_var); // deps last.
+    yield +(this.gn_var === "extern"); // 'extern_rlib' before 'extern'.
     yield this.gn_var; // A-Z.
   }
 }
@@ -966,7 +1003,7 @@ function parseCargoDirectives(lines) {
         case "rerun-if-env-changed":
           return; // Ignore
         default:
-          fail(
+          assert.fail(
             `Unsupported cargo instruction in custom_build output: ${line}\n` +
               "Note that arbitrary metadata isn't currently supported.",
             stdout
@@ -1211,22 +1248,18 @@ class Command extends Node {
       this.output = outputs[0];
     }
 
-    // Target type.
-    this.target_type = {
-      rustc: "rust_crate",
-      ar: "static_library",
-      lib: "static_library",
-      cc: "source_set",
-      cl: "source_set"
-    }[base.program];
-
     // Set target_name.
     if (base.program === "rustc") {
-      this.target_name = this.args
+      const target_name = this.args
         .filter(a => a.rustflag === "--crate-name")
-        // `crate-name` is sometimes missing.
-        // TODO: filter those non-target rustc invocations earlier.
         .only("value", false);
+      // Some rustc invocations are not a target, e.g. those that just extract
+      // some info.
+      if (!target_name || /^[_]+$/.test(target_name)) {
+        this.not_a_target = true;
+        return;
+      }
+      this.target_name = target_name;
     } else if (this.output) {
       let output_filename = basename(this.output);
       this.target_name = [
@@ -1238,6 +1271,29 @@ class Command extends Node {
         .filter(Boolean)
         .map(m => m[1])
         .shift();
+    }
+
+    // Target type.
+    if (base.program === "rustc") {
+      const crate_type =
+        this.args
+          .filter(a => a.rustflag === "--crate-type")
+          .only("value", false) || "bin";
+      this.target_type = {
+        bin: "rust_executable",
+        lib: "rust_rlib",
+        rlib: "rust_rlib",
+        "proc-macro": "rust_proc_macro"
+      }[crate_type];
+      assert(this.target_type);
+    } else {
+      this.target_type = {
+        rustc: "rust_crate",
+        ar: "static_library",
+        lib: "static_library",
+        cc: "source_set",
+        cl: "source_set"
+      }[base.program];
     }
   }
 }
@@ -1371,6 +1427,7 @@ let overrides = [
 function generate(trace_output) {
   const commands = new Node(Array.from(trace_output).values())
     .map(Command)
+    .filter(c => !c.not_a_target)
     .map(Object.freeze);
 
   let outputRootDir = commands
