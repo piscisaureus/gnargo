@@ -51,11 +51,15 @@ main(async () => {
 
 async function cargoFetch() {
   // TODO: figure out how to do `stdio: "inherit"` with async execFile.
-  execFileSync("cargo", ["fetch", "--manifest-path", manifest_path], {
-    cwd: temp_dir,
-    env: base_env,
-    stdio: "inherit"
-  });
+  execFileSync(
+    "cargo",
+    ["fetch", "--locked", "--manifest-path", manifest_path],
+    {
+      cwd: temp_dir,
+      env: base_env,
+      stdio: "inherit"
+    }
+  );
 }
 
 async function traceTargetBuild(target) {
@@ -103,6 +107,7 @@ async function traceTargetBuild(target) {
     "cargo",
     [
       "build",
+      "--locked",
       "--release",
       "--target",
       target,
