@@ -1354,6 +1354,7 @@ let overrides = [
   use_latest("rand"),
   use_latest("rand_core"),
   use_latest("nix"),
+  use_latest("dirs"),
   {
     kind: "dep",
     match: dep => dep.package_name === "owning_ref",
