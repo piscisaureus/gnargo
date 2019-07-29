@@ -371,16 +371,8 @@ class SortableScope extends Annotatable {
     }
   }
   static compare(a, b) {
-    // let dn = 0,
-    // d =
-    //   a instanceof GNVarPartialAssignmentSection &&
-    //   b instanceof GNVarPartialAssignmentSection;
-    // d = d && a.package_name === "winapi";
-    // d = d && b.package_name === "winapi";
-    // if (!a.sortKey) console.error(a.constructor.name);
     let sortKeyPairs = SortableScope.zip(a.sortKey(), b.sortKey());
     for (const [aa, bb] of sortKeyPairs) {
-      // console.log(dn++, ":", a.gn_var, a.gn_type, aa, bb, b.gn_type, b.gn_var);
       if (aa < bb) return -1;
       if (aa > bb) return 1;
     }
