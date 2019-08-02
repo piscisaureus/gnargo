@@ -1294,198 +1294,6 @@ class Command extends Node {
   }
 }
 
-let replace_dep = (matcher, replacer) => {
-  const get_lookup_key = target =>
-    `${target.package_name}-${target.package_version}`;
-  let replacements;
-
-  return {
-    kind: "dep",
-    init(all_targets) {
-      replacements = new Map();
-      replacer.init(all_targets);
-    },
-    run(dependee, depender) {
-      if (!matcher(dependee, depender)) {
-        return;
-      }
-
-      let depender_key = get_lookup_key(depender);
-      let dependee_key = get_lookup_key(dependee);
-
-      let depender_replacements;
-      if (replacements.has(depender_key)) {
-        depender_replacements = replacements.get(depender_key);
-      } else {
-        depender_replacements = new Map();
-        replacements.set(depender_key, depender_replacements);
-      }
-
-      let replacement;
-      if (depender_replacements.has(dependee_key)) {
-        replacement = depender_replacements.get(dependee_key);
-      } else {
-        const subst_target = replacer.run(dependee, depender);
-        replacement =
-          subst_target != null && get_lookup_key(subst_target) != dependee_key
-            ? {
-                depender,
-                orig_dep: dependee,
-                subst_dep: new Node(subst_target, {
-                  crate_alias: dependee.crate_alias
-                })
-              }
-            : null;
-        depender_replacements.set(dependee_key, replacement);
-      }
-
-      return replacement && replacement.subst_dep;
-    },
-    comment(record) {
-      let record_key = get_lookup_key(record);
-
-      let depender_replacements = replacements.get(record_key);
-      if (depender_replacements) {
-        return [...depender_replacements.values()]
-          .filter(Boolean)
-          .map(({ orig_dep, subst_dep }) => {
-            assert(orig_dep.target_name === subst_dep.target_name);
-            return (
-              `Override: ` +
-              `use ${subst_dep.target_name} v${subst_dep.package_version} ` +
-              `instead of v${orig_dep.package_version}.`
-            );
-          })
-          .join("\n");
-      }
-
-      return replacer.comment(record);
-    }
-  };
-};
-
-let latest_version_of = matcher => {
-  let subst_target;
-  return {
-    init(all_targets) {
-      subst_target = all_targets
-        .filter(matcher)
-        .reduce((result, target) =>
-          SemVer.gt(target.package_version, result.package_version)
-            ? target
-            : result
-        );
-    },
-    run(dependee) {
-      return subst_target;
-    },
-    comment(record) {
-      const { target_name, package_version } = subst_target;
-      return `Override: use ${target_name} v${package_version} instead.`;
-    }
-  };
-};
-
-let remove_if = matcher => (...args) => (matcher(...args) ? [] : null);
-
-let windows_only = target_name => [
-  {
-    kind: "dep",
-    run: remove_if(
-      dep => dep.target_name === target_name && !/windows/.test(dep.target)
-    ),
-    comment: `Override: '${target_name}' should be a windows-only dependency.`
-  },
-  {
-    kind: "record",
-    run: remove_if(
-      record =>
-        record.target_name === target_name &&
-        !/windows/.test(record.target_triple)
-    ),
-    invisible: true
-  }
-];
-
-let overrides = [
-  ...windows_only("winapi"),
-  ...windows_only("kernel32"),
-  replace_dep(
-    t => t.target_name === "rand",
-    latest_version_of(
-      t => t.target_name === "rand" && SemVer.lt(t.package_version, "0.7.0")
-    )
-  ),
-  replace_dep(
-    t => t.target_name === "rand_core",
-    latest_version_of(
-      t =>
-        t.target_name === "rand_core" &&
-        SemVer.gte(t.package_version, "0.3.0") &&
-        SemVer.lt(t.package_version, "0.5.0")
-    )
-  ),
-  {
-    kind: "dep",
-    run: remove_if(dep => dep.package_name === "owning_ref"),
-    comment: "Override: avoid dependency on on 'owning_ref'."
-  },
-  {
-    kind: "record",
-    run: remove_if(record =>
-      Object.values(record).some(v => /owning[-_]ref/.test(v))
-    ),
-    comment: "Override: avoid dependency on on 'owning_ref'."
-  },
-  {
-    kind: "dep",
-    run: remove_if(dep => dep.target_name === "ring-test"),
-    comment: "Override: don't build 'ring-test' static library."
-  },
-  {
-    comment: `Suppress "warning: '_addcarry_u64' is not a recognized builtin."`,
-    kind: "record",
-    run(rec) {
-      if (
-        rec.target_name === "ring-core" &&
-        /windows/.test(rec.target_triple) &&
-        rec.libflag
-      ) {
-        let { output, value, path, libflag, ...keep } = rec;
-        return [
-          rec, // Insert -- don't replace.
-          new rec.constructor({
-            cflag: "-Wno-ignored-pragma-intrinsic",
-            ...keep,
-            force: true
-          })
-        ];
-      }
-    }
-  },
-  {
-    comment: `Supress "warning: '_GNU_SOURCE' macro redefined."`,
-    kind: "record",
-    run(rec) {
-      if (
-        rec.target_name === "ring-core" &&
-        /linux/.test(rec.target_triple) &&
-        rec.arflag
-      ) {
-        let { output, value, path, libflag, ...keep } = rec;
-        return [
-          rec, // Insert -- don't replace.
-          new rec.constructor({
-            cflag: "-Wno-macro-redefined",
-            ...keep,
-            force: true
-          })
-        ];
-      }
-    }
-  }
-];
-
 function generate(trace_output) {
   const commands = new Node(Array.from(trace_output).values())
     .map(Command)
@@ -1813,3 +1621,197 @@ function generate(trace_output) {
 
   return { build_gn, package_dirs };
 }
+
+// ===== Overrides =====
+
+let replace_dep = (matcher, replacer) => {
+  const get_lookup_key = target =>
+    `${target.package_name}-${target.package_version}`;
+  let replacements;
+
+  return {
+    kind: "dep",
+    init(all_targets) {
+      replacements = new Map();
+      replacer.init(all_targets);
+    },
+    run(dependee, depender) {
+      if (!matcher(dependee, depender)) {
+        return;
+      }
+
+      let depender_key = get_lookup_key(depender);
+      let dependee_key = get_lookup_key(dependee);
+
+      let depender_replacements;
+      if (replacements.has(depender_key)) {
+        depender_replacements = replacements.get(depender_key);
+      } else {
+        depender_replacements = new Map();
+        replacements.set(depender_key, depender_replacements);
+      }
+
+      let replacement;
+      if (depender_replacements.has(dependee_key)) {
+        replacement = depender_replacements.get(dependee_key);
+      } else {
+        const subst_target = replacer.run(dependee, depender);
+        replacement =
+          subst_target != null && get_lookup_key(subst_target) != dependee_key
+            ? {
+                depender,
+                orig_dep: dependee,
+                subst_dep: new Node(subst_target, {
+                  crate_alias: dependee.crate_alias
+                })
+              }
+            : null;
+        depender_replacements.set(dependee_key, replacement);
+      }
+
+      return replacement && replacement.subst_dep;
+    },
+    comment(record) {
+      let record_key = get_lookup_key(record);
+
+      let depender_replacements = replacements.get(record_key);
+      if (depender_replacements) {
+        return [...depender_replacements.values()]
+          .filter(Boolean)
+          .map(({ orig_dep, subst_dep }) => {
+            assert(orig_dep.target_name === subst_dep.target_name);
+            return (
+              `Override: ` +
+              `use ${subst_dep.target_name} v${subst_dep.package_version} ` +
+              `instead of v${orig_dep.package_version}.`
+            );
+          })
+          .join("\n");
+      }
+
+      return replacer.comment(record);
+    }
+  };
+};
+
+let latest_version_of = matcher => {
+  let subst_target;
+  return {
+    init(all_targets) {
+      subst_target = all_targets
+        .filter(matcher)
+        .reduce((result, target) =>
+          SemVer.gt(target.package_version, result.package_version)
+            ? target
+            : result
+        );
+    },
+    run(dependee) {
+      return subst_target;
+    },
+    comment(record) {
+      const { target_name, package_version } = subst_target;
+      return `Override: use ${target_name} v${package_version} instead.`;
+    }
+  };
+};
+
+let remove_if = matcher => (...args) => (matcher(...args) ? [] : null);
+
+let windows_only = target_name => [
+  {
+    kind: "dep",
+    run: remove_if(
+      dep => dep.target_name === target_name && !/windows/.test(dep.target)
+    ),
+    comment: `Override: '${target_name}' should be a windows-only dependency.`
+  },
+  {
+    kind: "record",
+    run: remove_if(
+      record =>
+        record.target_name === target_name &&
+        !/windows/.test(record.target_triple)
+    ),
+    invisible: true
+  }
+];
+
+let overrides = [
+  ...windows_only("winapi"),
+  ...windows_only("kernel32"),
+  replace_dep(
+    t => t.target_name === "rand",
+    latest_version_of(
+      t => t.target_name === "rand" && SemVer.lt(t.package_version, "0.7.0")
+    )
+  ),
+  replace_dep(
+    t => t.target_name === "rand_core",
+    latest_version_of(
+      t =>
+        t.target_name === "rand_core" &&
+        SemVer.gte(t.package_version, "0.3.0") &&
+        SemVer.lt(t.package_version, "0.5.0")
+    )
+  ),
+  {
+    kind: "dep",
+    run: remove_if(dep => dep.package_name === "owning_ref"),
+    comment: "Override: avoid dependency on on 'owning_ref'."
+  },
+  {
+    kind: "record",
+    run: remove_if(record =>
+      Object.values(record).some(v => /owning[-_]ref/.test(v))
+    ),
+    comment: "Override: avoid dependency on on 'owning_ref'."
+  },
+  {
+    kind: "dep",
+    run: remove_if(dep => dep.target_name === "ring-test"),
+    comment: "Override: don't build 'ring-test' static library."
+  },
+  {
+    comment: `Suppress "warning: '_addcarry_u64' is not a recognized builtin."`,
+    kind: "record",
+    run(rec) {
+      if (
+        rec.target_name === "ring-core" &&
+        /windows/.test(rec.target_triple) &&
+        rec.libflag
+      ) {
+        let { output, value, path, libflag, ...keep } = rec;
+        return [
+          rec, // Insert -- don't replace.
+          new rec.constructor({
+            cflag: "-Wno-ignored-pragma-intrinsic",
+            ...keep,
+            force: true
+          })
+        ];
+      }
+    }
+  },
+  {
+    comment: `Supress "warning: '_GNU_SOURCE' macro redefined."`,
+    kind: "record",
+    run(rec) {
+      if (
+        rec.target_name === "ring-core" &&
+        /linux/.test(rec.target_triple) &&
+        rec.arflag
+      ) {
+        let { output, value, path, libflag, ...keep } = rec;
+        return [
+          rec, // Insert -- don't replace.
+          new rec.constructor({
+            cflag: "-Wno-macro-redefined",
+            ...keep,
+            force: true
+          })
+        ];
+      }
+    }
+  }
+];
