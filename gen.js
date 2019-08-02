@@ -459,7 +459,7 @@ class Root extends Node {
       .assign({ gnScope: this })
       .groupBy({ key: "package_name" })
       .groupBy({ key: "package_version" }, true)
-      .groupBy({ key: "package_version_is_latest" }, true)
+      .groupBy({ key: "package_version_is_canonical" }, true)
       .groupBy({ key: "target_name" }, true)
       .groupBy({ key: "target_type" }, true)
       .map(Crate)
@@ -485,7 +485,7 @@ class Crate extends SortableScope {
     this.targetTriples = new TargetTripleSet(items);
     this.crateName = items.target_name;
     this.crateVersion = items.package_version;
-    this.gnTargetName = items.package_version_is_latest
+    this.gnTargetName = items.package_version_is_canonical
       ? this.crateName
       : `${this.crateName}-${this.crateVersion}`;
 
@@ -495,7 +495,7 @@ class Crate extends SortableScope {
     let suppressionSet = gnRules.map(rule => rule.suppressed);
     assert(!suppressionSet.has("undefined"));
     let suppressed = !suppressionSet.has(false);
-    if (!items.package_version_is_latest) {
+    if (!items.package_version_is_canonical) {
       for (const target_triple of this.targetTriples) {
         for (const gv of [
           GN.assignment("crate_name", this.crateName),
@@ -533,7 +533,7 @@ class Crate extends SortableScope {
   }
   *sortKey() {
     yield* super.sortKey();
-    yield -this.package_version_is_latest; // Up-to-date crates first.
+    yield -this.package_version_is_canonical; // Up-to-date crates first.
     yield this.crateName; // A-Z.
     yield SemVer.ordinal(this.crateVersion); // semver low => high.
   }
@@ -647,8 +647,8 @@ class GNRule extends Node {
     }
     switch (items.dep_target_type) {
       case "static_library": {
-        let { dep_version, dep_crate_name, dep_version_is_latest } = items;
-        const gn_label = dep_version_is_latest
+        let { dep_version, dep_crate_name, dep_version_is_canonical } = items;
+        const gn_label = dep_version_is_canonical
           ? `:${dep_crate_name}`
           : `:${dep_crate_name}:${dep_version}`;
         return GN.list_item("deps", gn_label);
@@ -660,7 +660,7 @@ class GNRule extends Node {
           dep_crate_alias,
           dep_crate_name,
           dep_version,
-          dep_version_is_latest
+          dep_version_is_canonical
         } = items;
         const dep_crate_type = {
           rust_rlib: "rlib",
@@ -670,19 +670,19 @@ class GNRule extends Node {
         if (
           dep_crate_name === dep_crate_alias &&
           dep_crate_type === "rlib" &&
-          dep_version_is_latest
+          dep_version_is_canonical
         ) {
           // Common case; store dependency in the `extern_rlib` list.
           return GN.list_item("extern_rlib", dep_crate_name);
         } else {
           // Special case: store extended dependency info in the `extern` list.
           const extern = {
-            label: dep_version_is_latest
+            label: dep_version_is_canonical
               ? `:${dep_crate_name}`
               : `:${dep_crate_name}-${dep_version}`,
             crate_type: dep_crate_type,
             crate_name: dep_crate_name,
-            crate_version: dep_version_is_latest ? undefined : dep_version,
+            crate_version: dep_version_is_canonical ? undefined : dep_version,
             crate_alias:
               dep_crate_name === dep_crate_alias ? undefined : dep_crate_alias
           };
@@ -1338,17 +1338,17 @@ function generate(trace_output) {
       .groupBy({ key: "package_name" })
       .map(packageCommands => {
         const versions = packageCommands.groupBy({ key: "package_version" });
-        const latest_version = versions
-          .map(pkg => pkg.package_version)
-          .reduce((latest, version) =>
-            !latest || SemVer.ordinal(version) > SemVer.ordinal(latest)
-              ? version
-              : latest
-          );
+        const canonical_version = versions.reduce((result, pkg_ver) =>
+          SemVer.ordinal(pkg_ver.package_version) >
+          SemVer.ordinal(result.package_version)
+            ? pkg_ver
+            : result
+        );
         return packageCommands.map(
           cmd =>
             new cmd.constructor(cmd, {
-              package_version_is_latest: cmd.package_version === latest_version
+              package_version_is_canonical:
+                cmd.package_version === canonical_version.package_version
             })
         );
       })
@@ -1478,7 +1478,7 @@ function generate(trace_output) {
             dep_target_type: dep.target_type,
             dep_name: dep.package_name,
             dep_version: dep.package_version,
-            dep_version_is_latest: dep.package_version_is_latest,
+            dep_version_is_canonical: dep.package_version_is_canonical,
             dep_crate_alias: dep.crate_alias,
             dep_crate_name: dep.target_name
           }));
@@ -1511,7 +1511,7 @@ function generate(trace_output) {
         let {
           package_name,
           package_version,
-          package_version_is_latest,
+          package_version_is_canonical,
           package_dir,
           target_name,
           target_type,
@@ -1525,7 +1525,7 @@ function generate(trace_output) {
             new RustArg({
               package_name,
               package_version,
-              package_version_is_latest,
+              package_version_is_canonical,
               package_dir,
               target_name,
               target_type,
@@ -1694,7 +1694,7 @@ let replace_dep = (matcher, replacer) => {
   };
 };
 
-let latest_version_of = matcher => {
+let highest_version_of = matcher => {
   let subst_target;
   return {
     init(all_targets) {
@@ -1742,13 +1742,13 @@ let overrides = [
   ...windows_only("kernel32"),
   replace_dep(
     t => t.target_name === "rand",
-    latest_version_of(
+    highest_version_of(
       t => t.target_name === "rand" && SemVer.lt(t.package_version, "0.7.0")
     )
   ),
   replace_dep(
     t => t.target_name === "rand_core",
-    latest_version_of(
+    highest_version_of(
       t =>
         t.target_name === "rand_core" &&
         SemVer.gte(t.package_version, "0.3.0") &&
