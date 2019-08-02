@@ -379,11 +379,29 @@ class SortableScope extends Annotatable {
   }
 }
 
-function semverOrdinal(version) {
-  return version
-    .split(".")
-    .map(Number)
-    .reduce((acc, n) => acc * 1e5 + n);
+class SemVer {
+  static ordinal(version) {
+    return version
+      .split(".")
+      .map(Number)
+      .reduce((acc, n) => acc * 1e5 + n);
+  }
+
+  static gt(version, min_version) {
+    return SemVer.ordinal(version) > SemVer.ordinal(min_version);
+  }
+
+  static lt(version, min_version) {
+    return SemVer.ordinal(version) < SemVer.ordinal(min_version);
+  }
+
+  static gte(version, min_version) {
+    return SemVer.ordinal(version) >= SemVer.ordinal(min_version);
+  }
+
+  static lte(version, min_version) {
+    return SemVer.ordinal(version) <= SemVer.ordinal(min_version);
+  }
 }
 
 class UniqueStringSet extends Set {
@@ -517,7 +535,7 @@ class Crate extends SortableScope {
     yield* super.sortKey();
     yield -this.package_version_is_latest; // Up-to-date crates first.
     yield this.crateName; // A-Z.
-    yield semverOrdinal(this.crateVersion); // semver low => high.
+    yield SemVer.ordinal(this.crateVersion); // semver low => high.
   }
 }
 
@@ -1276,53 +1294,115 @@ class Command extends Node {
   }
 }
 
-let use_latest = target_name => ({
-  target_name,
-  init() {
-    this.old = new Map();
-    this.latest = null;
-  },
-  packageId(rec) {
-    return `${rec.package_name}-${rec.package_version}`;
-  },
-  kind: "dep",
-  match(dep, depender) {
-    return (
-      dep.target_name === this.target_name && !dep.package_version_is_latest
-    );
-  },
-  replace(dep, depender, candidates) {
-    const dep_crate_alias = dep.crate_alias;
-    let r = candidates.find(
-      c => c.target_name === dep.target_name && c.package_version_is_latest
-    );
-    this.old.set(this.packageId(depender), dep.package_version);
-    this.latest = r.package_version;
-    return new Node(r, { crate_alias: dep_crate_alias });
-  },
-  comment(rec, d, ch) {
-    let old = this.old.get(this.packageId(rec));
-    return (
-      `Override: use ${this.target_name} v${this.latest} instead` +
-      (old ? ` of v${old}.` : ".")
-    );
-  }
-});
+let replace_dep = (matcher, replacer) => {
+  const get_lookup_key = target =>
+    `${target.package_name}-${target.package_version}`;
+  let replacements;
+
+  return {
+    kind: "dep",
+    init(all_targets) {
+      replacements = new Map();
+      replacer.init(all_targets);
+    },
+    run(dependee, depender) {
+      if (!matcher(dependee, depender)) {
+        return;
+      }
+
+      let depender_key = get_lookup_key(depender);
+      let dependee_key = get_lookup_key(dependee);
+
+      let depender_replacements;
+      if (replacements.has(depender_key)) {
+        depender_replacements = replacements.get(depender_key);
+      } else {
+        depender_replacements = new Map();
+        replacements.set(depender_key, depender_replacements);
+      }
+
+      let replacement;
+      if (depender_replacements.has(dependee_key)) {
+        replacement = depender_replacements.get(dependee_key);
+      } else {
+        const subst_target = replacer.run(dependee, depender);
+        replacement =
+          subst_target != null && get_lookup_key(subst_target) != dependee_key
+            ? {
+                depender,
+                orig_dep: dependee,
+                subst_dep: new Node(subst_target, {
+                  crate_alias: dependee.crate_alias
+                })
+              }
+            : null;
+        depender_replacements.set(dependee_key, replacement);
+      }
+
+      return replacement && replacement.subst_dep;
+    },
+    comment(record) {
+      let record_key = get_lookup_key(record);
+
+      let depender_replacements = replacements.get(record_key);
+      if (depender_replacements) {
+        return [...depender_replacements.values()]
+          .filter(Boolean)
+          .map(({ orig_dep, subst_dep }) => {
+            assert(orig_dep.target_name === subst_dep.target_name);
+            return (
+              `Override: ` +
+              `use ${subst_dep.target_name} v${subst_dep.package_version} ` +
+              `instead of v${orig_dep.package_version}.`
+            );
+          })
+          .join("\n");
+      }
+
+      return replacer.comment(record);
+    }
+  };
+};
+
+let latest_version_of = matcher => {
+  let subst_target;
+  return {
+    init(all_targets) {
+      subst_target = all_targets
+        .filter(matcher)
+        .reduce((result, target) =>
+          SemVer.gt(target.package_version, result.package_version)
+            ? target
+            : result
+        );
+    },
+    run(dependee) {
+      return subst_target;
+    },
+    comment(record) {
+      const { target_name, package_version } = subst_target;
+      return `Override: use ${target_name} v${package_version} instead.`;
+    }
+  };
+};
+
+let remove_if = matcher => (...args) => (matcher(...args) ? [] : null);
 
 let windows_only = target_name => [
   {
     kind: "dep",
-    match: dep =>
-      dep.target_name === target_name && !/windows/.test(dep.target),
-    replace: () => null,
+    run: remove_if(
+      dep => dep.target_name === target_name && !/windows/.test(dep.target)
+    ),
     comment: `Override: '${target_name}' should be a windows-only dependency.`
   },
   {
     kind: "record",
-    match: record =>
-      record.target_name === target_name &&
-      !/windows/.test(record.target_triple),
-    replace: () => null,
+    run: remove_if(
+      record =>
+        record.target_name === target_name &&
+        !/windows/.test(record.target_triple)
+    ),
     invisible: true
   }
 ];
@@ -1330,68 +1410,78 @@ let windows_only = target_name => [
 let overrides = [
   ...windows_only("winapi"),
   ...windows_only("kernel32"),
-  use_latest("rand"),
-  use_latest("rand_core"),
+  replace_dep(
+    t => t.target_name === "rand",
+    latest_version_of(
+      t => t.target_name === "rand" && SemVer.lt(t.package_version, "0.7.0")
+    )
+  ),
+  replace_dep(
+    t => t.target_name === "rand_core",
+    latest_version_of(
+      t =>
+        t.target_name === "rand_core" &&
+        SemVer.gte(t.package_version, "0.3.0") &&
+        SemVer.lt(t.package_version, "0.5.0")
+    )
+  ),
   {
     kind: "dep",
-    match: dep => dep.package_name === "owning_ref",
-    replace: () => null,
+    run: remove_if(dep => dep.package_name === "owning_ref"),
     comment: "Override: avoid dependency on on 'owning_ref'."
   },
   {
     kind: "record",
-    match: record => Object.values(record).some(v => /owning[-_]ref/.test(v)),
-    replace: (record, all_records) => null,
+    run: remove_if(record =>
+      Object.values(record).some(v => /owning[-_]ref/.test(v))
+    ),
     comment: "Override: avoid dependency on on 'owning_ref'."
   },
   {
     kind: "dep",
-    match: dep => dep.target_name === "ring-test",
-    replace: (record, all_records) => null,
+    run: remove_if(dep => dep.target_name === "ring-test"),
     comment: "Override: don't build 'ring-test' static library."
   },
   {
     comment: `Suppress "warning: '_addcarry_u64' is not a recognized builtin."`,
     kind: "record",
-    match(rec) {
-      return (
+    run(rec) {
+      if (
         rec.target_name === "ring-core" &&
         /windows/.test(rec.target_triple) &&
         rec.libflag
-      );
-    },
-    replace(rec) {
-      let { output, value, path, libflag, ...keep } = rec;
-      return [
-        rec, // Insert -- don't replace.
-        new rec.constructor({
-          cflag: "-Wno-ignored-pragma-intrinsic",
-          ...keep,
-          force: true
-        })
-      ];
+      ) {
+        let { output, value, path, libflag, ...keep } = rec;
+        return [
+          rec, // Insert -- don't replace.
+          new rec.constructor({
+            cflag: "-Wno-ignored-pragma-intrinsic",
+            ...keep,
+            force: true
+          })
+        ];
+      }
     }
   },
   {
     comment: `Supress "warning: '_GNU_SOURCE' macro redefined."`,
     kind: "record",
-    match(rec) {
-      return (
+    run(rec) {
+      if (
         rec.target_name === "ring-core" &&
         /linux/.test(rec.target_triple) &&
         rec.arflag
-      );
-    },
-    replace(rec) {
-      let { output, value, path, libflag, ...keep } = rec;
-      return [
-        rec, // Insert -- don't replace.
-        new rec.constructor({
-          cflag: "-Wno-macro-redefined",
-          ...keep,
-          force: true
-        })
-      ];
+      ) {
+        let { output, value, path, libflag, ...keep } = rec;
+        return [
+          rec, // Insert -- don't replace.
+          new rec.constructor({
+            cflag: "-Wno-macro-redefined",
+            ...keep,
+            force: true
+          })
+        ];
+      }
     }
   }
 ];
@@ -1414,8 +1504,6 @@ function generate(trace_output) {
   const explicit_overrides = [];
   const invisible_overrides = [];
   for (const override of overrides) {
-    override.init && override.init();
-
     if (override.invisible) {
       invisible_overrides.push(override);
     } else {
@@ -1428,6 +1516,10 @@ function generate(trace_output) {
 
   let override_baseline = { kind: null, baseline: true };
   for (let oi = 0; oi <= explicit_overrides.length; oi++) {
+    console.log(
+      `Applying overrides... ` + `${oi}/${explicit_overrides.length}`
+    );
+
     const current_overrides = [
       override_baseline,
       ...invisible_overrides,
@@ -1435,14 +1527,13 @@ function generate(trace_output) {
     ];
 
     let records = commands
-      .filter(cmd => cmd.package_name)
       .groupBy({ key: "package_name" })
       .map(packageCommands => {
         const versions = packageCommands.groupBy({ key: "package_version" });
         const latest_version = versions
           .map(pkg => pkg.package_version)
           .reduce((latest, version) =>
-            !latest || semverOrdinal(version) > semverOrdinal(latest)
+            !latest || SemVer.ordinal(version) > SemVer.ordinal(latest)
               ? version
               : latest
           );
@@ -1461,27 +1552,24 @@ function generate(trace_output) {
       // targets into regular rustc targets. Drop rust commands with no output
       // and those that were built for the host (usually build-script-build deps).
       .map(target_commands => {
-        return (
-          target_commands
-            .filter(cmd => cmd.program !== "build-script-build")
-            .filter(cmd => cmd.target_name !== "build_script_build")
-            .filter(cmd => cmd.output)
-            //.filter(cmd => !!cmd.env.HOST)
-            .joinBy(
-              {
-                key: "package_id",
-                with: target_commands.filter(
-                  cmd => cmd.program === "build-script-build"
-                )
-              },
-              (l, r) => {
-                if (l.program !== "rustc" || !r) return l;
-                return new Node(l, {
-                  args: mergeRustcArgs(l.args, r.output_args)
-                });
-              }
-            )
-        );
+        return target_commands
+          .filter(cmd => cmd.program !== "build-script-build")
+          .filter(cmd => cmd.target_name !== "build_script_build")
+          .filter(cmd => cmd.output)
+          .joinBy(
+            {
+              key: "package_id",
+              with: target_commands.filter(
+                cmd => cmd.program === "build-script-build"
+              )
+            },
+            (l, r) => {
+              if (l.program !== "rustc" || !r) return l;
+              return new Node(l, {
+                args: mergeRustcArgs(l.args, r.output_args)
+              });
+            }
+          );
       })
       .map(target_commands => {
         // Add a default '--edition' arg to rust targets that don't have it.
@@ -1515,6 +1603,13 @@ function generate(trace_output) {
         });
       })
       .map(target_commands => {
+        // Initialize dep-level overrides. This happens on every round and for
+        // every target.
+        for (const override of current_overrides) {
+          if (override.kind !== "dep") continue;
+          override.init && override.init(Array.from(target_commands));
+        }
+
         // Find the command that builds the final output. Then work backwards and find
         // all deps.
         let outputMap = new Map(target_commands.map(cmd => [cmd.output, cmd]));
@@ -1534,6 +1629,7 @@ function generate(trace_output) {
             ...cmd.args
               .filter(a => a.rustflag === "--extern")
               .map(a => {
+                if (!outputMap.has(a.path)) console.log(a.path);
                 assert(outputMap.has(a.path));
                 const dep = outputMap.get(a.path);
                 return new Node(dep, {
@@ -1566,12 +1662,7 @@ function generate(trace_output) {
           for (const override of current_overrides) {
             if (override.kind !== "dep") continue;
             depCommands = depCommands
-              .map(dep =>
-                override.match(dep, cmd)
-                  ? override.replace(dep, cmd, Array.from(target_commands))
-                  : dep
-              )
-              .filter(dep => dep !== null)
+              .map(dep => override.run(dep, cmd) || [dep])
               .reduce(...flat);
           }
           // Extract dep info that we need to keep associated with this cmd.
@@ -1640,13 +1731,11 @@ function generate(trace_output) {
     // Apply record-level overrides.
     for (const override of current_overrides) {
       if (override.kind !== "record") continue;
+      // Initialize the override. This happens again on every round.
+      override.init && override.init(Array.from(records));
+      // Apply the override.
       records = records
-        .map(record =>
-          override.match(record)
-            ? override.replace(record, Array.from(records))
-            : record
-        )
-        .filter(record => record !== null)
+        .map(record => override.run(record) || [record])
         .reduce(...flat);
     }
 
