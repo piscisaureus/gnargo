@@ -1337,8 +1337,17 @@ function generate(trace_output) {
     let records = commands
       .groupBy({ key: "package_name" })
       .map(packageCommands => {
-        const versions = packageCommands.groupBy({ key: "package_version" });
-        const canonical_version = versions.reduce((result, pkg_ver) =>
+        let pkg_versions = packageCommands.groupBy({ key: "package_version" });
+        // Apply canonical_version overrides.
+        for (const override of current_overrides) {
+          if (override.kind !== "canonical_version") continue;
+          pkg_versions = pkg_versions
+            .map(pkg_ver => override.run(pkg_ver) || [pkg_ver])
+            .reduce(...flat);
+        }
+        // Now determine what the highest version number that appears in
+        // `pkg_versions` is, and mark it as canonical.
+        const canonical_version = pkg_versions.reduce((result, pkg_ver) =>
           SemVer.ordinal(pkg_ver.package_version) >
           SemVer.ordinal(result.package_version)
             ? pkg_ver
@@ -1740,10 +1749,17 @@ let windows_only = target_name => [
 let overrides = [
   ...windows_only("winapi"),
   ...windows_only("kernel32"),
+  {
+    kind: "canonical_version",
+    run: remove_if(
+      p => p.package_name === "rand" && SemVer.gte(p.package_version, "0.7.0")
+    ),
+    invisible: true
+  },
   replace_dep(
     t => t.target_name === "rand",
     highest_version_of(
-      t => t.target_name === "rand" && SemVer.lt(t.package_version, "0.7.0")
+      t => t.target_name === "rand" && t.package_version_is_canonical
     )
   ),
   replace_dep(
