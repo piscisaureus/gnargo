@@ -1725,6 +1725,14 @@ let highest_version_of = matcher => {
   };
 };
 
+let use_canonical_version = target_name =>
+  replace_dep(
+    t => t.target_name === target_name,
+    highest_version_of(
+      t => t.target_name === target_name && t.package_version_is_canonical
+    )
+  );
+
 let remove_if = matcher => (...args) => (matcher(...args) ? [] : null);
 
 let windows_only = target_name => [
@@ -1756,12 +1764,7 @@ let overrides = [
     ),
     invisible: true
   },
-  replace_dep(
-    t => t.target_name === "rand",
-    highest_version_of(
-      t => t.target_name === "rand" && t.package_version_is_canonical
-    )
-  ),
+  use_canonical_version("rand"),
   replace_dep(
     t => t.target_name === "rand_core",
     highest_version_of(
