@@ -1344,8 +1344,6 @@ let overrides = [
   ...windows_only("kernel32"),
   use_latest("rand"),
   use_latest("rand_core"),
-  use_latest("nix"),
-  use_latest("dirs"),
   {
     kind: "dep",
     match: dep => dep.package_name === "owning_ref",
@@ -1363,12 +1361,6 @@ let overrides = [
     match: dep => dep.target_name === "ring-test",
     replace: (record, all_records) => null,
     comment: "Override: don't build 'ring-test' static library."
-  },
-  {
-    comment: "Override: no fuchsia stuff.",
-    kind: "record",
-    match: record => Object.values(record).some(v => /fuchsia/.test(v)),
-    replace: (record, all_records) => null
   },
   {
     comment: `Suppress "warning: '_addcarry_u64' is not a recognized builtin."`,
