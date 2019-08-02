@@ -41,7 +41,6 @@ async function findGn(commands) {
     .filter(Boolean)
     .sort((a, b) => a.length - b.length)
     .shift();
-  console.log(denoSourceDir);
   return (await searchDir(
     `${denoSourceDir}/third_party/v8/buildtools`,
     f => f.isFile() && f.name === `gn${exeSuffix}`
