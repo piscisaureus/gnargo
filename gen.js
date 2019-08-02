@@ -480,12 +480,11 @@ class Crate extends SortableScope {
     if (!items.package_version_is_latest) {
       for (const target_triple of this.targetTriples) {
         for (const gv of [
-          { gn_var: "crate_name", gn_value: this.crateName },
-          { gn_var: "crate_version", gn_value: this.crateVersion }
+          GN.assignment("crate_name", this.crateName),
+          GN.assignment("crate_version", this.crateVersion)
         ]) {
           gnRules = gnRules.add(
             new GNRule({
-              gn_type: "string",
               ...gv,
               target_triple,
               suppressed: suppressed,
@@ -499,7 +498,7 @@ class Crate extends SortableScope {
     const gnVars = gnRules
       .assign({ crate: this, gnScope: this })
       .groupBy({ key: "gn_var" })
-      .assign(ii => ({ gn_type: ii.only("gn_type") }), null)
+      .assign(ii => ({ gn_kind: ii.only("gn_kind") }), null)
       .map(GNVar);
 
     const gnAssignments = gnVars.flat();
@@ -522,6 +521,52 @@ class Crate extends SortableScope {
   }
 }
 
+class GN {
+  static stringify(val) {
+    const $ = GN.stringify;
+
+    if (typeof val === "string") {
+      // TODO: actually implement this instead of using JSON.stringify.
+      return JSON.stringify(val);
+    } else if (Array.isArray(val)) {
+      const items = val.filter(v => v !== undefined);
+      switch (items.length) {
+        case 0:
+          return `[]`;
+        case 1:
+          return `[ ${$(items[0])} ]`;
+        default:
+          return [`[`, ...items.map(v => `  ${$(v)},`), `]`].join("\n");
+      }
+    } else if (val && typeof val === "object") {
+      const entries = [...Object.entries(val)].filter(
+        ([k, v]) => v !== undefined
+      );
+      return [`{`, ...entries.map(([k, v]) => `  ${k} = ${$(v)}`), `}`].join(
+        "\n"
+      );
+    } else {
+      assert.fail("Can't convert value for gn.");
+    }
+  }
+
+  static assignment(var_name, value) {
+    return {
+      gn_kind: "assignment",
+      gn_var: var_name,
+      gn_value: GN.stringify(value)
+    };
+  }
+
+  static list_item(list_var_name, ...items) {
+    return {
+      gn_kind: "list_item",
+      gn_var: list_var_name,
+      gn_value: items.map(GN.stringify).join(",\n")
+    };
+  }
+}
+
 class GNRule extends Node {
   init(items) {
     let commentSet = new CommentSet();
@@ -535,32 +580,20 @@ class GNRule extends Node {
     this.commentSet = commentSet;
 
     switch (items.rustflag) {
-      case "--cfg":
+      case "--cfg": {
         let m = /^feature=(".*")$/.exec(items.value);
         if (m) {
-          return {
-            gn_type: "list_string",
-            gn_var: "features",
-            gn_value: JSON.parse(m[1])
-          };
+          return GN.list_item("features", JSON.parse(m[1]));
+        } else {
+          return GN.list_item("cfg", items.value);
         }
-        return { gn_type: "list_string", gn_var: "cfg", gn_value: items.value };
+      }
       case "--cap-lints":
-        return {
-          gn_type: "list_raw",
-          gn_var: "args",
-          gn_value: [items.rustflag, items.value]
-            .map(JSON.stringify)
-            .join(",\n")
-        };
+        return GN.list_item("args", items.rustflag, items.value);
       case "--edition": {
         const edition = items.value;
         if (edition === "2018") return;
-        return {
-          gn_type: "string",
-          gn_var: "edition",
-          gn_value: edition
-        };
+        return GN.assignment("edition", edition);
       }
       case "-l": {
         let { name, kind, target_triple } = items;
@@ -572,51 +605,27 @@ class GNRule extends Node {
         } else if (/windows/.test(target_triple)) {
           name += ".lib";
         }
-        return {
-          gn_type: "list_string",
-          gn_var: "libs",
-          gn_value: name
-        };
+        return GN.list_item("libs", name);
       }
     }
     switch (items.source) {
       case "rs":
-        return {
-          gn_type: "string",
-          gn_var: "source_root",
-          gn_value: items.path
-        };
+        return GN.assignment("source_root", items.path);
       case "cc":
-        return {
-          gn_type: "list_string",
-          gn_var: "sources",
-          gn_value: items.path
-        };
+        return GN.list_item("sources", items.path);
     }
     switch (items.input) {
       case "object":
-        return {
-          gn_type: "list_string",
-          gn_var: "libs",
-          gn_value: items.path
-        };
+        return GN.list_item("libs", items.path);
     }
     switch (items.cflag) {
       case "-I":
-        return {
-          gn_type: "list_string",
-          gn_var: "include_dirs",
-          gn_value: items.path
-        };
+        return GN.list_item("include_dirs", items.path);
       case undefined:
         break;
       default:
         if (!items.force) break;
-        return {
-          gn_type: "list_string",
-          gn_var: "cflags",
-          gn_value: items.cflag
-        };
+        return GN.list_item("cflags", items.cflag);
     }
     switch (items.dep_target_type) {
       case "static_library": {
@@ -624,68 +633,42 @@ class GNRule extends Node {
         const gn_label = dep_version_is_latest
           ? `:${dep_crate_name}`
           : `:${dep_crate_name}:${dep_version}`;
-        return {
-          gn_type: "list_string",
-          gn_var: "deps",
-          gn_value: gn_label
-        };
+        return GN.list_item("deps", gn_label);
       }
-      case "rust_rlib": {
-        const $ = JSON.stringify;
-        const { dep_crate_name, dep_version, dep_version_is_latest } = items;
-        if (!dep_version_is_latest) {
-          return {
-            gn_type: "list_raw",
-            gn_var: "extern",
-            gn_value: [
-              `{`,
-              `  label = ":${dep_crate_name}-${dep_version}"`,
-              `  crate_name = ${$(dep_crate_name)}`,
-              `  crate_type = "rlib"`,
-              `  crate_version = ${$(dep_version)}`,
-              `}`
-            ].join("\n")
-          };
-        } else {
-          return {
-            gn_type: "list_string",
-            gn_var: "extern_rlib",
-            gn_value: `${dep_crate_name}`
-          };
-        }
-      }
+      case "rust_rlib":
       case "rust_proc_macro": {
         const $ = JSON.stringify;
-        const { dep_crate_name, dep_version, dep_version_is_latest } = items;
+        const {
+          dep_crate_alias,
+          dep_crate_name,
+          dep_version,
+          dep_version_is_latest
+        } = items;
         const dep_crate_type = {
           rust_rlib: "rlib",
           rust_proc_macro: "proc_macro"
-        }[dep_target_type];
-        if (!dep_version_is_latest) {
-          return {
-            gn_type: "list_raw",
-            gn_var: "extern",
-            gn_value: [
-              `{`,
-              `  label = ":${dep_crate_name}-${dep_version}"`,
-              `  crate_name = ${$(dep_crate_name)}`,
-              `  crate_type = "proc_macro"`,
-              `  crate_version = ${$(dep_version)}`,
-              `}`
-            ].join("\n")
-          };
+        }[items.dep_target_type];
+
+        if (
+          dep_crate_name === dep_crate_alias &&
+          dep_crate_type === "rlib" &&
+          dep_version_is_latest
+        ) {
+          // Common case; store dependency in the `extern_rlib` list.
+          return GN.list_item("extern_rlib", dep_crate_name);
         } else {
-          return {
-            gn_type: "list_raw",
-            gn_var: "extern",
-            gn_value: [
-              `{`,
-              `  label = ":${dep_crate_name}"`,
-              `  crate_name = ${$(dep_crate_name)}`,
-              `  crate_type = "proc_macro"`,
-              `}`
-            ].join("\n")
+          // Special case: store extended dependency info in the `extern` list.
+          const extern = {
+            label: dep_version_is_latest
+              ? `:${dep_crate_name}`
+              : `:${dep_crate_name}-${dep_version}`,
+            crate_type: dep_crate_type,
+            crate_name: dep_crate_name,
+            crate_version: dep_version_is_latest ? undefined : dep_version,
+            crate_alias:
+              dep_crate_name === dep_crate_alias ? undefined : dep_crate_alias
           };
+          return GN.list_item("extern", extern);
         }
       }
     }
@@ -694,10 +677,10 @@ class GNRule extends Node {
 
 class GNVar extends Node {
   init(items) {
-    this.gn_type = items.only("gn_type");
+    this.gn_kind = items.only("gn_kind");
 
     const assignedValues = items
-      .assign({ gn_type: this.gn_type })
+      .assign({ gn_kind: this.gn_kind })
       .groupBy({ key: "gn_value" })
       .groupBy({ key: "suppressed" }, true)
       .map(GNVarAssignedValue);
@@ -740,15 +723,19 @@ class GNVarAssignedValue extends SortableScope {
   }
 
   writeInner() {
-    let { gn_var, gn_type, gn_value: out } = this;
-    // TODO: gn_string() ... ?
-    if (/string$/.test(gn_type)) out = JSON.stringify(out);
-    if (/^list_/.test(gn_type)) {
-      out += ",";
-    } else {
-      out = gn_var + " = " + out;
+    const { gn_var, gn_kind, gn_value } = this;
+    let gn_code;
+    switch (gn_kind) {
+      case "assignment":
+        gn_code = gn_var + " = " + gn_value;
+        break;
+      case "list_item":
+        gn_code = gn_value + ",";
+        break;
+      default:
+        assert.fail(`Unexpected gn_kind: ${gn_kind}`);
     }
-    return out
+    return gn_code
       .split("\n")
       .map(s => s.trimRight())
       .filter(Boolean);
@@ -772,7 +759,7 @@ class GNVarPartialAssignment extends SortableScope {
       .sort();
   }
   writeInner() {
-    if (!/^list/.test(this.gn_type)) {
+    if (!/^list/.test(this.gn_kind)) {
       return Array.from(this).map(ii => ii.write());
     } else {
       let childLines = this.writeChildren();
@@ -804,11 +791,11 @@ class GNVarPartialAssignment extends SortableScope {
   }
   *sortKey() {
     yield* super.sortKey();
-    assert(this.gn_var && this.gn_type);
+    assert(this.gn_var && this.gn_kind);
     yield +this.suppressed; // Suppressed rules last.
     yield this.commentSet.size; // Comments last.
     yield* this.commentSet.values();
-    yield this.gn_type === "string" ? 0 : 1; // Primitive values first.
+    yield this.gn_kind === "assignment" ? 0 : 1; // Single values before lists.
     yield +(this.gn_var === "args"); // 'args' last.
     yield +/^extern|^(deps|libs)$/.test(this.gn_var); // deps last.
     yield +(this.gn_var === "extern"); // 'extern_rlib' before 'extern'.
@@ -961,7 +948,7 @@ function parseRustcArgs(args) {
               "-L": ["path", "kind", "path"],
               "--codegen": ["optname", "optname", "optval"],
               "--emit": ["kind", "kind", "path"],
-              "--extern": ["crate_name", "crate_name", "path"]
+              "--extern": ["crate_alias", "crate_alias", "path"]
             }[o.rustflag] || [])[i]
           ])
           .filter(([v, key]) => v && key)
@@ -1305,12 +1292,13 @@ let use_latest = target_name => ({
     );
   },
   replace(dep, depender, candidates) {
+    const dep_crate_alias = dep.crate_alias;
     let r = candidates.find(
       c => c.target_name === dep.target_name && c.package_version_is_latest
     );
     this.old.set(this.packageId(depender), dep.package_version);
     this.latest = r.package_version;
-    return r;
+    return new Node(r, { crate_alias: dep_crate_alias });
   },
   comment(rec, d, ch) {
     let old = this.old.get(this.packageId(rec));
@@ -1547,7 +1535,10 @@ function generate(trace_output) {
               .filter(a => a.rustflag === "--extern")
               .map(a => {
                 assert(outputMap.has(a.path));
-                return outputMap.get(a.path);
+                const dep = outputMap.get(a.path);
+                return new Node(dep, {
+                  crate_alias: a.crate_alias
+                });
               })
           );
           // Find static library deps.
@@ -1589,6 +1580,7 @@ function generate(trace_output) {
             dep_name: dep.package_name,
             dep_version: dep.package_version,
             dep_version_is_latest: dep.package_version_is_latest,
+            dep_crate_alias: dep.crate_alias,
             dep_crate_name: dep.target_name
           }));
           cmd = new cmd.constructor(cmd, { deps });
