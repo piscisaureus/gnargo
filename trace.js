@@ -274,6 +274,19 @@ async function traceTargetBuild(target) {
     command.output_cargo_directives = proc.stdout.filter(l =>
       /^cargo:/.test(l)
     );
+    command.generated_files = {};
+    let out_dir = env.OUT_DIR;
+    if (out_dir) {
+      for await (const entry of walkDir(out_dir)) {
+        const ext = extname(entry.name);
+        if (ext !== ".rs") continue;
+        const generated_lines = (command.generated_files[entry.path] = []);
+        const stream = createReadStream(entry.path, { encoding: "utf8" });
+        for await (const line of iterLines(stream)) {
+          generated_lines.push(line);
+        }
+      }
+    }
     return proc;
   }
 
