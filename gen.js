@@ -1482,10 +1482,8 @@ function generate(trace_output) {
             ...cmd.args
               .filter(a => a.rustflag === "--extern")
               .map(a => {
-                if (!outputMap.has(a.path)) console.log(a.path);
                 assert(outputMap.has(a.path));
-                const dep = outputMap.get(a.path);
-                return new Node(dep, {
+                return new Node(outputMap.get(a.path), {
                   crate_alias: a.crate_alias
                 });
               })
