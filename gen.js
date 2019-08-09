@@ -1000,8 +1000,9 @@ function parseCargoDirectives(lines) {
           return; // Ignore
         default:
           assert.fail(
-            `Unsupported cargo instruction in custom_build output: ${line}\n` +
-              "Note that arbitrary metadata isn't currently supported.",
+            `Unsupported cargo instruction in custom build script output:\n` +
+              `  ${line}\n` +
+              `Note that arbitrary metadata isn't currently supported.`,
             stdout
           );
       }
@@ -1212,11 +1213,6 @@ class Command extends Node {
         }
         this.args = new Node(parsed_args.values());
         break;
-      case "build-script-build":
-        this.output_args = new Node(
-          parseCargoDirectives(v.output_cargo_directives).values()
-        );
-        break;
       case "ar":
         this.args = new Node(parseArArgs(v.args, v.cwd).values());
         break;
@@ -1229,6 +1225,17 @@ class Command extends Node {
       case "lib":
         this.args = new Node(parseLibArgs(v.args, v.cwd).values());
         break;
+      default:
+        if (/^build-script-/.test(base.program)) {
+          this.output_args = new Node(
+            parseCargoDirectives(v.output_cargo_directives).values()
+          );
+          this.generated_files = new Node(
+            parseGeneratedFiles(v.generated_files || {}, v).values()
+          );
+          break;
+        }
+        assert.fail(`Unknown tool: ${base.program}`);
     }
 
     // Set output.
@@ -1370,14 +1377,13 @@ function generate(trace_output) {
       // and those that were built for the host (usually build-script-build deps).
       .map(target_commands => {
         return target_commands
-          .filter(cmd => cmd.program !== "build-script-build")
-          .filter(cmd => cmd.target_name !== "build_script_build")
+          .filter(cmd => !/^build-script-/.test(cmd.program))
           .filter(cmd => cmd.output)
           .joinBy(
             {
               key: "package_id",
-              with: target_commands.filter(
-                cmd => cmd.program === "build-script-build"
+              with: target_commands.filter(cmd =>
+                /^build-script-/.test(cmd.program)
               )
             },
             (l, r) => {

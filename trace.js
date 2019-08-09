@@ -235,9 +235,12 @@ async function traceTargetBuild(target) {
       case "ar":
         proc = await cTool(command);
         break;
-      case "build-script-build":
-        proc = await customBuild(command);
-        break;
+      default:
+        if (/^build-script-/.test(program)) {
+          proc = await customBuild(command);
+          break;
+        }
+        assert.fail(`Unknown tool: ${program}`);
     }
 
     if (proc) {
@@ -263,11 +266,7 @@ async function traceTargetBuild(target) {
       command.output_cargo_directives = [];
       return; // Don't run Deno's own custom build script.
     }
-    let realExe = resolve(
-      cwd,
-      dirname(exe),
-      `real-build-script-build${exeSuffix}`
-    );
+    let realExe = resolve(cwd, dirname(exe), `real-${basename(exe)}`);
     let proc = await spawn_lines(realExe, args, {
       cwd,
       env: { ...env, ...shim_env }
@@ -330,7 +329,7 @@ async function traceTargetBuild(target) {
       command.outputs = file_names.map(f => resolve(cwd, out_dir || ".", f));
     }
 
-    if (!target || meta || crate_name === "build_script_build") {
+    if (!target || meta || /^build_script_/.test(crate_name)) {
       proc = await spawn_lines("rustc", args, { cwd, env: real_env, input });
       if (proc.exitCode !== 0) return proc;
     } else {
@@ -350,15 +349,18 @@ async function traceTargetBuild(target) {
       }
     }
 
-    if (crate_name === "build_script_build") {
+    if (/^build_script_/.test(crate_name)) {
       // Rename build-script-build executable.
       assert.strictEqual(file_names.length, 1);
-      let f1 = resolve(cwd, out_dir, file_names[0]),
-        dir = dirname(f1),
-        ext = extname(f1);
-      let f2 = resolve(dir, `real-build-script-build${ext}`);
+      let f1 = resolve(cwd, out_dir, file_names[0]);
+      let dir = dirname(f1);
+      let uncurried_name = basename(f1, exeSuffix)
+        .replace(/-[0-9a-f]+$/, "")
+        .replace(/_/g, "-");
+      let f2 = resolve(dir, `real-${uncurried_name}${exeSuffix}`);
+      // Rename the actual build script executable.
       renameSync(f1, f2);
-      // Place a shim over the original.
+      // Place a shim at the original path.
       writeShim(f1);
     }
 
