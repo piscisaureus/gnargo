@@ -1,0 +1,7 @@
+{
+  "name": "gnargo",
+  "version": "0.0.1",
+  "dependencies": {
+    "semver": "^6.3.0"
+  }
+}

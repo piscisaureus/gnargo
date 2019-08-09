@@ -1,6 +1,7 @@
 "use strict";
 
 const assert = require("assert");
+const semver = require("semver");
 const { resolve, basename, extname, dirname, relative } = require("path");
 const { readFileSync, writeFileSync, readDirSync } = require("fs");
 const { inspect } = require("util");
@@ -388,29 +389,13 @@ class SortableScope extends Annotatable {
   }
 }
 
-class SemVer {
-  static ordinal(version) {
-    return version
-      .split(".")
-      .map(Number)
-      .reduce((acc, n) => acc * 1e5 + n);
-  }
-
-  static gt(version, min_version) {
-    return SemVer.ordinal(version) > SemVer.ordinal(min_version);
-  }
-
-  static lt(version, min_version) {
-    return SemVer.ordinal(version) < SemVer.ordinal(min_version);
-  }
-
-  static gte(version, min_version) {
-    return SemVer.ordinal(version) >= SemVer.ordinal(min_version);
-  }
-
-  static lte(version, min_version) {
-    return SemVer.ordinal(version) <= SemVer.ordinal(min_version);
-  }
+function semverOrdinal(version) {
+  // Not exactly correct, but good enough.
+  return `${version}.0`
+    .replace(/([+-]).*$/, ".$11")
+    .split(/\.|(?=[+-])/)
+    .map(Number)
+    .reduce((acc, n) => acc * 1e5 + n);
 }
 
 class UniqueStringSet extends Set {
@@ -544,7 +529,8 @@ class Crate extends SortableScope {
     yield* super.sortKey();
     yield -this.package_version_is_canonical; // Up-to-date crates first.
     yield this.crateName; // A-Z.
-    yield SemVer.ordinal(this.crateVersion); // semver low => high.
+    yield semverOrdinal(this.crateVersion); // semver low => high.
+    yield this.crateVersion;
   }
 }
 
@@ -1393,8 +1379,7 @@ function generate(trace_output) {
         // Now determine what the highest version number that appears in
         // `pkg_versions` is, and mark it as canonical.
         const canonical_version = pkg_versions.reduce((result, pkg_ver) =>
-          SemVer.ordinal(pkg_ver.package_version) >
-          SemVer.ordinal(result.package_version)
+          semver.gt(pkg_ver.package_version, result.package_version)
             ? pkg_ver
             : result
         );
@@ -1772,7 +1757,7 @@ let highest_version_of = matcher => {
       subst_target = all_targets
         .filter(matcher)
         .reduce((result, target) =>
-          SemVer.gt(target.package_version, result.package_version)
+          semver.gt(target.package_version, result.package_version)
             ? target
             : result
         );
@@ -1822,7 +1807,7 @@ let overrides = [
   {
     kind: "canonical_version",
     run: remove_if(
-      p => p.package_name === "rand" && SemVer.gte(p.package_version, "0.7.0")
+      p => p.package_name === "rand" && semver.gte(p.package_version, "0.7.0")
     ),
     invisible: true
   },
@@ -1834,8 +1819,8 @@ let overrides = [
     highest_version_of(
       t =>
         t.target_name === "rand_core" &&
-        SemVer.gte(t.package_version, "0.3.0") &&
-        SemVer.lt(t.package_version, "0.5.0")
+        semver.gte(t.package_version, "0.3.0") &&
+        semver.lt(t.package_version, "0.5.0")
     )
   ),
   {
