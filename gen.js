@@ -5,7 +5,14 @@ const semver = require("semver");
 const { resolve, basename, extname, dirname, relative } = require("path");
 const { readFileSync, writeFileSync, readDirSync } = require("fs");
 const { inspect } = require("util");
-const { execFile, readFile, writeFile, mkdir } = require("./lib/async");
+const {
+  execFile,
+  spawn,
+  readFile,
+  writeFile,
+  mkdir,
+  mkdtemp
+} = require("./lib/async");
 const { searchDir, exeSuffix, flat, main } = require("./lib/util");
 
 const WORK_DIR = process.argv[2] || `${__dirname}/work`;
@@ -1024,7 +1031,7 @@ function parseGeneratedFiles(generated_files, cmd) {
       gen_file_content: lines.map(l => `${l}\n`).join("")
     }))
     .map(arg => ({
-      generated: "file",
+      generated: "text_file",
       path: resolve(package_gen_dir, arg.gen_file_name),
       ...arg
     }));
@@ -1629,12 +1636,27 @@ function generate(trace_output) {
     })()
   );
 
-  // Build a table of generated files and their contents.
-  let generated_files = Array.from(
-    records
-      .filter(rec => rec.generated === "file")
+  // Initialize file formatters.
+  for (const f of file_formatters) {
+    f.init && f.init();
+  }
+
+  // Normalize generated file contents and apply formatters.
+  // Gather the results in a `path => content` associative table.
+  let generated_files = [
+    ...records
+      .filter(rec => rec.generated === "text_file")
       .filter(rec => !rec.suppressed)
-  ).reduce((table, { path, gen_file_content }) => {
+      // Apply specialized formatters.
+      .map(rec => {
+        for (const f of file_formatters) {
+          const gen_file_content = f.run(rec, rec.gen_file_content);
+          if (gen_file_content == null) continue;
+          rec = new Node(rec, { gen_file_content });
+        }
+        return rec;
+      })
+  ].reduce((table, { path, gen_file_content }) => {
     if (!(path in table)) {
       table[path] = gen_file_content;
     } else {
@@ -1884,4 +1906,104 @@ let overrides = [
       }
     }
   }
+];
+
+// ===== Generated file formatters =====
+
+const line_ending_formatter = {
+  run(_, content) {
+    return content
+      .replace(/[ \t\r]+\n/g, "\n") // Remove trailing whitespace.
+      .replace(/\n{3,}/g, "\n\n") // Allow max. 2 consecutive newlines.
+      .replace(/^\n+/, "") // Remove empty lines at start of file.
+      .replace(/\n*$/, "\n"); // End the file with exactly one newline.
+  }
+};
+
+const rustfmt_formatter = options => {
+  const DEFAULT_OPTIONS = {
+    force_explicit_abi: false,
+    max_width: 80,
+    tab_spaces: 4,
+    hard_tabs: false,
+    newline_style: "Unix",
+    merge_derives: true,
+    remove_nested_parens: true,
+    use_field_init_shorthand: true,
+    use_try_shorthand: true,
+    reorder_imports: false,
+    reorder_modules: false,
+    use_small_heuristics: "Default"
+  };
+  const TEMP_DIR = resolve(resolve(WORK_DIR, "temp"));
+
+  let config_dir;
+  return {
+    init() {
+      mkdir.sync(TEMP_DIR, { recursive: true });
+      config_dir = mkdtemp.sync(`${TEMP_DIR}/rustfmt-config-`);
+      const config_file = resolve(config_dir, "rustfmt.toml");
+      writeFile.sync(
+        config_file,
+        Object.entries({ ...DEFAULT_OPTIONS, ...options })
+          .map(([k, v]) => `${k} = ${JSON.stringify(v)}\n`)
+          .join("")
+      );
+    },
+    run(_, content) {
+      const result = spawn.sync(
+        "rustfmt",
+        ["--config-path", config_dir, "--emit", "stdout"],
+        { stdio: "pipe", input: content, encoding: "utf8" }
+      );
+      if (result.status !== 0) {
+        throw new Error(result.stderr.trimRight() || "rustfmt failed");
+      }
+      return result.stdout;
+    }
+  };
+};
+
+const format_if = (matcher, formatter) => ({
+  init() {
+    formatter.init && formatter.init();
+  },
+  run(rec, content) {
+    if (!matcher(rec)) {
+      return;
+    }
+    return formatter.run(rec, content);
+  }
+});
+
+const format_target_gen_file = (target_name, gen_file_name, formatter) =>
+  format_if(
+    (rec, _) =>
+      rec.target_name === target_name && rec.gen_file_name === gen_file_name,
+    formatter
+  );
+
+const file_formatters = [
+  format_target_gen_file(
+    "typenum",
+    "consts.rs",
+    rustfmt_formatter({ max_width: 10000, use_small_heuristics: "Off" })
+  ),
+  format_target_gen_file("mime_guess", "mime_types_generated.rs", {
+    FORCE_LINE_BREAK: "// !FORCE_LINE_BREAK!",
+    rustfmt: rustfmt_formatter({ max_width: 160, use_small_heuristics: "Off" }),
+    init() {
+      this.rustfmt.init();
+    },
+    run(rec, content) {
+      content = content.replace(
+        /(\,)\s*?([ \t]*\(UniCase)\b/g,
+        `$1 ${this.FORCE_LINE_BREAK}\n$2`
+      );
+      content = this.rustfmt.run(rec, content);
+      content = content.split(this.FORCE_LINE_BREAK).join("");
+      return content;
+    }
+  }),
+  line_ending_formatter
 ];
