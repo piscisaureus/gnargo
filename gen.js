@@ -1813,6 +1813,8 @@ let overrides = [
   },
   use_canonical_version("rand"),
   use_canonical_version("ansi_term"),
+  use_canonical_version("log"),
+  use_canonical_version("mime_guess"),
   use_canonical_version("scopeguard"),
   replace_dep(
     t => t.target_name === "rand_core",
