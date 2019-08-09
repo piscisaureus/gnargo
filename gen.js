@@ -1933,7 +1933,7 @@ const rustfmt_formatter = options => {
     reorder_modules: false,
     use_small_heuristics: "Default"
   };
-  const TEMP_DIR = resolve(resolve(WORK_DIR, "temp"));
+  const TEMP_DIR = resolve(WORK_DIR, "temp");
 
   let config_dir;
   return {
