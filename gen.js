@@ -1774,13 +1774,13 @@ let highest_version_of = matcher => {
   let subst_target;
   return {
     init(all_targets) {
-      subst_target = all_targets
-        .filter(matcher)
-        .reduce((result, target) =>
-          semver.gt(target.package_version, result.package_version)
-            ? target
-            : result
-        );
+      let candidate_targets = all_targets.filter(matcher);
+      if (candidate_targets.length === 0) return;
+      subst_target = candidate_targets.reduce((result, target) =>
+        semver.gt(target.package_version, result.package_version)
+          ? target
+          : result
+      );
     },
     run(dependee) {
       return subst_target;
