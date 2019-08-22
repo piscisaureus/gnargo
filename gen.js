@@ -609,7 +609,7 @@ class GNRule extends Node {
         }
       }
       case "--cap-lints":
-        return GN.list_item("args", items.rustflag, items.value);
+        return GN.assignment("cap_lints", items.value);
       case "--edition": {
         const edition = items.value;
         if (edition === "2018") return;
