@@ -294,8 +294,8 @@ async function traceTargetBuild(target) {
     const { program, cwd, args } = command;
     for (const arg of args) {
       let m =
-        (program === "lib" && /^\/OUT:(.*)$/.exec(arg)) ||
-        (program === "cl" && /^\/Fo(.*)$/.exec(arg)) ||
+        (program === "lib" && /^[\/\-]OUT:(.*)$/i.exec(arg)) ||
+        (program === "cl" && /^[\/\-]Fo(.*)$/.exec(arg)) ||
         (program === "cc" && /^\-o(.*)$/.exec(arg));
       program === "ar" && /^(.*\.a)$/.exec(arg);
       if (m) {

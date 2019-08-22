@@ -1172,19 +1172,19 @@ function parseLibArgs([...args], cwd) {
   let argsOut = [];
   let arg;
   while ((arg = args.shift())) {
-    let m = /^(\/[^:]+)(?::(.*))?$/.exec(arg);
+    let m = /^[\/\-]([^:]+)(?::(.*))?$/.exec(arg);
     if (m) {
       let [, libflag, value] = m;
       let output, path;
-      switch (libflag) {
-        case "/OUT":
+      switch (libflag.toUpperCase()) {
+        case "OUT":
           output = "static_lib";
         // Fall through.
-        case "/DEF":
-        case "/LIST":
-        case "/LIBPATH":
-        case "/NAME":
-        case "/OUT":
+        case "DEF":
+        case "LIST":
+        case "LIBPATH":
+        case "NAME":
+        case "OUT":
           path = resolve(cwd, value);
       }
       argsOut.push({ libflag, value, output, path });
