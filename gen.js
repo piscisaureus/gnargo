@@ -1835,7 +1835,11 @@ let overrides = [
   use_canonical_version("ansi_term"),
   use_canonical_version("log"),
   use_canonical_version("mime_guess"),
+  use_canonical_version("proc_macro2"),
+  use_canonical_version("quote"),
   use_canonical_version("scopeguard"),
+  use_canonical_version("syn"),
+  use_canonical_version("unicode_xid"),
   replace_dep(
     t => t.target_name === "rand_core",
     highest_version_of(
