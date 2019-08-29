@@ -1865,6 +1865,27 @@ let overrides = [
     )
   },
     ),
+  {
+    comment: "These env vars are used by reqwest to set its user-agent string.",
+    kind: "record",
+    run(rec) {
+      if (rec.target_name === "reqwest" && rec.source) {
+        let { source, ...meta } = rec;
+        return [
+          rec, // Insert -- don't replace.
+          new rec.constructor({
+            ...meta,
+            env_key: "CARGO_PKG_NAME",
+            env_value: rec.package_name
+          }),
+          new rec.constructor({
+            ...meta,
+            env_key: "CARGO_PKG_VERSION",
+            env_value: rec.package_version
+          })
+        ];
+      }
+    }
   },
   {
     comment: "Override: don't build 'ring-test' static library.",
