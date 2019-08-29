@@ -296,8 +296,8 @@ async function traceTargetBuild(target) {
       let m =
         (program === "lib" && /^[\/\-]OUT:(.*)$/i.exec(arg)) ||
         (program === "cl" && /^[\/\-]Fo(.*)$/.exec(arg)) ||
-        (program === "cc" && /^\-o(.*)$/.exec(arg));
-      program === "ar" && /^(.*\.a)$/.exec(arg);
+        (program === "cc" && /^\-o(.*)$/.exec(arg)) ||
+        (program === "ar" && /^(.*\.a)$/.exec(arg));
       if (m) {
         let filename = resolve(cwd, m[1]);
         writeFileSync(filename, "");
