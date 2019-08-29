@@ -696,6 +696,9 @@ class GNRule extends Node {
         }
       }
     }
+    if (items.env_key) {
+      return GN.list_item("env", `${items.env_key}=${items.env_value}`);
+    }
   }
 }
 
