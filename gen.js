@@ -1853,21 +1853,23 @@ let overrides = [
     )
   ),
   {
+    comment: "Override: avoid dependency on on 'owning_ref'.",
     kind: "dep",
-    run: remove_if(dep => dep.package_name === "owning_ref"),
-    comment: "Override: avoid dependency on on 'owning_ref'."
+    run: remove_if(dep => dep.package_name === "owning_ref")
   },
   {
+    comment: "Override: avoid dependency on on 'owning_ref'.",
     kind: "record",
     run: remove_if(record =>
       Object.values(record).some(v => /owning[-_]ref/.test(v))
+    )
+  },
     ),
-    comment: "Override: avoid dependency on on 'owning_ref'."
   },
   {
+    comment: "Override: don't build 'ring-test' static library.",
     kind: "dep",
-    run: remove_if(dep => dep.target_name === "ring-test"),
-    comment: "Override: don't build 'ring-test' static library."
+    run: remove_if(dep => dep.target_name === "ring-test")
   },
   {
     comment: `Suppress "warning: '_addcarry_u64' is not a recognized builtin."`,
@@ -1878,12 +1880,12 @@ let overrides = [
         /windows/.test(rec.target_triple) &&
         rec.libflag
       ) {
-        let { output, value, path, libflag, ...keep } = rec;
+        let { output, value, path, libflag, ...meta } = rec;
         return [
           rec, // Insert -- don't replace.
           new rec.constructor({
+            ...meta,
             cflag: "-Wno-ignored-pragma-intrinsic",
-            ...keep,
             force: true
           })
         ];
@@ -1899,12 +1901,12 @@ let overrides = [
         /linux/.test(rec.target_triple) &&
         rec.arflag
       ) {
-        let { output, value, path, libflag, ...keep } = rec;
+        let { output, value, path, libflag, ...meta } = rec;
         return [
           rec, // Insert -- don't replace.
           new rec.constructor({
+            ...meta,
             cflag: "-Wno-macro-redefined",
-            ...keep,
             force: true
           })
         ];
