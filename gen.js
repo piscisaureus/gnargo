@@ -1904,6 +1904,24 @@ let overrides = [
     }
   },
   {
+    comment:
+      "This env var is used by trust-dns-resolver to implement `version()`.",
+    kind: "record",
+    run(rec) {
+      if (rec.target_name === "trust_dns_resolver" && rec.source) {
+        let { source, ...meta } = rec;
+        return [
+          rec, // Insert -- don't replace.
+          new rec.constructor({
+            ...meta,
+            env_key: "CARGO_PKG_VERSION",
+            env_value: rec.package_version
+          })
+        ];
+      }
+    }
+  },
+  {
     comment: "Override: don't build 'ring-test' static library.",
     kind: "dep",
     run: remove_if(dep => dep.target_name === "ring-test")
