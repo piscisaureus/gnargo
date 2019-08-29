@@ -292,15 +292,17 @@ async function traceTargetBuild(target) {
 
   function cTool(command) {
     const { program, cwd, args } = command;
-    for (const arg of args) {
-      let m =
-        (program === "lib" && /^[\/\-]OUT:(.*)$/i.exec(arg)) ||
-        (program === "cl" && /^[\/\-]Fo(.*)$/.exec(arg)) ||
-        (program === "cc" && /^\-o(.*)$/.exec(arg)) ||
-        (program === "ar" && /^(.*\.a)$/.exec(arg));
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i];
+      const m =
+        (program === "lib" && /^[\/\-]OUT:(?<filename>.+)$/i.exec(arg)) ||
+        (program === "cl" && /^[\/\-]Fo(?<filename>.+)?$/.exec(arg)) ||
+        (program === "cc" && /^\-o(?<filename>.+)?$/.exec(arg)) ||
+        (program === "ar" && /^(?<filename>.+\.a)$/.exec(arg));
       if (m) {
-        let filename = resolve(cwd, m[1]);
-        writeFileSync(filename, "");
+        const filename = m.groups.filename || args[++i];
+        const path = resolve(cwd, filename);
+        writeFileSync(path, "");
       }
     }
   }
