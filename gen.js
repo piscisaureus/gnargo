@@ -1864,7 +1864,23 @@ let overrides = [
       Object.values(record).some(v => /owning[-_]ref/.test(v))
     )
   },
+  {
+    comment: "Override: 'backtrace' is not supported on POSIX platforms.",
+    kind: "record",
+    run: remove_if(
+      record =>
+        Object.values(record).some(v => /backtrace/.test(v)) &&
+        !/-windows-/.test(record.target_triple)
+    )
+  },
+  {
+    kind: "dep",
+    run: remove_if(
+      (dep, cmd) =>
+        dep.package_name === "backtrace" && !/-windows-/.test(cmd.target)
     ),
+    invisible: true
+  },
   {
     comment: "These env vars are used by reqwest to set its user-agent string.",
     kind: "record",
